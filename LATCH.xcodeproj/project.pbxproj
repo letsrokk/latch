@@ -1,0 +1,159 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000001 /* libLATCHShared.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* libLATCHShared.a */; };
+		A00000000000000000000002 /* libLATCHShared.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* libLATCHShared.a */; };
+		A00000000000000000000003 /* libLATCHShared.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* libLATCHShared.a */; };
+		A00000000000000000000004 /* libLATCHNative.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D00000000000000000000006 /* libLATCHNative.a */; };
+		A00000000000000000000005 /* libLATCHShared.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* libLATCHShared.a */; };
+		A00000000000000000000006 /* libLATCHNative.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D00000000000000000000006 /* libLATCHNative.a */; };
+		A00000000000000000000007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000008 /* Assets.xcassets */; };
+		A00000000000000000000008 /* LATCHDaemon in Embed Helpers */ = {isa = PBXBuildFile; fileRef = D00000000000000000000002 /* LATCHDaemon */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A00000000000000000000009 /* LATCHAgent in Embed Helpers */ = {isa = PBXBuildFile; fileRef = D00000000000000000000003 /* LATCHAgent */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A0000000000000000000000A /* LATCHProbe in Embed Helpers */ = {isa = PBXBuildFile; fileRef = D00000000000000000000004 /* LATCHProbe */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A0000000000000000000000B /* com.github.letsrokk.latch.daemon.plist in Embed Launch Daemon */ = {isa = PBXBuildFile; fileRef = D00000000000000000000009 /* com.github.letsrokk.latch.daemon.plist */; };
+		A0000000000000000000000C /* com.github.letsrokk.latch.agent.plist in Embed Launch Agent */ = {isa = PBXBuildFile; fileRef = D0000000000000000000000A /* com.github.letsrokk.latch.agent.plist */; };
+		A0000000000000000000000D /* libLATCHShared.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* libLATCHShared.a */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C00000000000000000000001 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000005; remoteInfo = LATCHShared; };
+		C00000000000000000000002 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000005; remoteInfo = LATCHShared; };
+		C00000000000000000000003 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000005; remoteInfo = LATCHShared; };
+		C00000000000000000000004 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000006; remoteInfo = LATCHNative; };
+		C00000000000000000000005 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000005; remoteInfo = LATCHShared; };
+		C00000000000000000000006 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000006; remoteInfo = LATCHNative; };
+		C00000000000000000000007 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000002; remoteInfo = LATCHDaemon; };
+		C00000000000000000000008 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000003; remoteInfo = LATCHAgent; };
+		C00000000000000000000009 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000004; remoteInfo = LATCHProbe; };
+		C0000000000000000000000A /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = F00000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B00000000000000000000005; remoteInfo = LATCHShared; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		190000000000000000000001 /* Embed Helpers */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = Contents/Library/Helpers; dstSubfolderSpec = 1; files = (A00000000000000000000008 /* LATCHDaemon in Embed Helpers */, A00000000000000000000009 /* LATCHAgent in Embed Helpers */, A0000000000000000000000A /* LATCHProbe in Embed Helpers */,); name = "Embed Helpers"; runOnlyForDeploymentPostprocessing = 0; };
+		190000000000000000000002 /* Embed Launch Daemon */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = Contents/Library/LaunchDaemons; dstSubfolderSpec = 1; files = (A0000000000000000000000B /* com.github.letsrokk.latch.daemon.plist in Embed Launch Daemon */,); name = "Embed Launch Daemon"; runOnlyForDeploymentPostprocessing = 0; };
+		190000000000000000000003 /* Embed Launch Agent */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = Contents/Library/LaunchAgents; dstSubfolderSpec = 1; files = (A0000000000000000000000C /* com.github.letsrokk.latch.agent.plist in Embed Launch Agent */,); name = "Embed Launch Agent"; runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		D00000000000000000000001 /* LATCH.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LATCH.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D00000000000000000000002 /* LATCHDaemon */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LATCHDaemon; sourceTree = BUILT_PRODUCTS_DIR; };
+		D00000000000000000000003 /* LATCHAgent */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LATCHAgent; sourceTree = BUILT_PRODUCTS_DIR; };
+		D00000000000000000000004 /* LATCHProbe */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LATCHProbe; sourceTree = BUILT_PRODUCTS_DIR; };
+		D00000000000000000000005 /* libLATCHShared.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libLATCHShared.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		D00000000000000000000006 /* libLATCHNative.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libLATCHNative.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		D00000000000000000000007 /* LATCHTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LATCHTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D00000000000000000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D00000000000000000000009 /* com.github.letsrokk.latch.daemon.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Packaging/LaunchDaemons/com.github.letsrokk.latch.daemon.plist; sourceTree = "<group>"; };
+		D0000000000000000000000A /* com.github.letsrokk.latch.agent.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Packaging/LaunchAgents/com.github.letsrokk.latch.agent.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		E00000000000000000000001 /* LATCHApp */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources/LATCHApp; sourceTree = "<group>"; };
+		E00000000000000000000002 /* LATCHDaemon */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources/LATCHDaemon; sourceTree = "<group>"; };
+		E00000000000000000000003 /* LATCHAgent */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources/LATCHAgent; sourceTree = "<group>"; };
+		E00000000000000000000004 /* LATCHProbe */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources/LATCHProbe; sourceTree = "<group>"; };
+		E00000000000000000000005 /* LATCHShared */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources/LATCHShared; sourceTree = "<group>"; };
+		E00000000000000000000006 /* LATCHNative */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources/LATCHNative; sourceTree = "<group>"; };
+		E00000000000000000000007 /* LATCHTests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Tests/LATCHTests; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		110000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001 /* libLATCHShared.a in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		110000000000000000000002 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000003 /* libLATCHShared.a in Frameworks */, A00000000000000000000004 /* libLATCHNative.a in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		110000000000000000000003 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000002 /* libLATCHShared.a in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		110000000000000000000004 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000005 /* libLATCHShared.a in Frameworks */, A00000000000000000000006 /* libLATCHNative.a in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		110000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		110000000000000000000006 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		110000000000000000000007 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000D /* libLATCHShared.a in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		120000000000000000000001 = {isa = PBXGroup; children = (E00000000000000000000001 /* LATCHApp */, E00000000000000000000002 /* LATCHDaemon */, E00000000000000000000003 /* LATCHAgent */, E00000000000000000000004 /* LATCHProbe */, E00000000000000000000005 /* LATCHShared */, E00000000000000000000006 /* LATCHNative */, E00000000000000000000007 /* LATCHTests */, D00000000000000000000008 /* Assets.xcassets */, D00000000000000000000009 /* com.github.letsrokk.latch.daemon.plist */, D0000000000000000000000A /* com.github.letsrokk.latch.agent.plist */, 120000000000000000000002 /* Products */,); sourceTree = "<group>"; };
+		120000000000000000000002 /* Products */ = {isa = PBXGroup; children = (D00000000000000000000001 /* LATCH.app */, D00000000000000000000002 /* LATCHDaemon */, D00000000000000000000003 /* LATCHAgent */, D00000000000000000000004 /* LATCHProbe */, D00000000000000000000005 /* libLATCHShared.a */, D00000000000000000000006 /* libLATCHNative.a */, D00000000000000000000007 /* LATCHTests.xctest */,); name = Products; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXHeadersBuildPhase section */
+		130000000000000000000006 /* Headers */ = {isa = PBXHeadersBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXHeadersBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		B00000000000000000000001 /* LATCH */ = {isa = PBXNativeTarget; buildConfigurationList = 180000000000000000000001 /* Build configuration list for PBXNativeTarget "LATCH" */; buildPhases = (140000000000000000000001 /* Sources */, 110000000000000000000001 /* Frameworks */, 150000000000000000000001 /* Resources */, 190000000000000000000001 /* Embed Helpers */, 190000000000000000000002 /* Embed Launch Daemon */, 190000000000000000000003 /* Embed Launch Agent */,); buildRules = (); dependencies = (160000000000000000000001 /* PBXTargetDependency */, 160000000000000000000007 /* PBXTargetDependency */, 160000000000000000000008 /* PBXTargetDependency */, 160000000000000000000009 /* PBXTargetDependency */,); fileSystemSynchronizedGroups = (E00000000000000000000001 /* LATCHApp */,); name = LATCH; packageProductDependencies = (); productName = LATCH; productReference = D00000000000000000000001 /* LATCH.app */; productType = "com.apple.product-type.application"; };
+		B00000000000000000000002 /* LATCHDaemon */ = {isa = PBXNativeTarget; buildConfigurationList = 180000000000000000000002 /* Build configuration list for PBXNativeTarget "LATCHDaemon" */; buildPhases = (140000000000000000000002 /* Sources */, 110000000000000000000002 /* Frameworks */,); buildRules = (); dependencies = (160000000000000000000003 /* PBXTargetDependency */, 160000000000000000000004 /* PBXTargetDependency */,); fileSystemSynchronizedGroups = (E00000000000000000000002 /* LATCHDaemon */,); name = LATCHDaemon; packageProductDependencies = (); productName = LATCHDaemon; productReference = D00000000000000000000002 /* LATCHDaemon */; productType = "com.apple.product-type.tool"; };
+		B00000000000000000000003 /* LATCHAgent */ = {isa = PBXNativeTarget; buildConfigurationList = 180000000000000000000003 /* Build configuration list for PBXNativeTarget "LATCHAgent" */; buildPhases = (140000000000000000000003 /* Sources */, 110000000000000000000003 /* Frameworks */,); buildRules = (); dependencies = (160000000000000000000002 /* PBXTargetDependency */,); fileSystemSynchronizedGroups = (E00000000000000000000003 /* LATCHAgent */,); name = LATCHAgent; packageProductDependencies = (); productName = LATCHAgent; productReference = D00000000000000000000003 /* LATCHAgent */; productType = "com.apple.product-type.tool"; };
+		B00000000000000000000004 /* LATCHProbe */ = {isa = PBXNativeTarget; buildConfigurationList = 180000000000000000000004 /* Build configuration list for PBXNativeTarget "LATCHProbe" */; buildPhases = (140000000000000000000004 /* Sources */, 110000000000000000000004 /* Frameworks */,); buildRules = (); dependencies = (160000000000000000000005 /* PBXTargetDependency */, 160000000000000000000006 /* PBXTargetDependency */,); fileSystemSynchronizedGroups = (E00000000000000000000004 /* LATCHProbe */,); name = LATCHProbe; packageProductDependencies = (); productName = LATCHProbe; productReference = D00000000000000000000004 /* LATCHProbe */; productType = "com.apple.product-type.tool"; };
+		B00000000000000000000005 /* LATCHShared */ = {isa = PBXNativeTarget; buildConfigurationList = 180000000000000000000005 /* Build configuration list for PBXNativeTarget "LATCHShared" */; buildPhases = (140000000000000000000005 /* Sources */, 110000000000000000000005 /* Frameworks */,); buildRules = (); dependencies = (); fileSystemSynchronizedGroups = (E00000000000000000000005 /* LATCHShared */,); name = LATCHShared; packageProductDependencies = (); productName = LATCHShared; productReference = D00000000000000000000005 /* libLATCHShared.a */; productType = "com.apple.product-type.library.static"; };
+		B00000000000000000000006 /* LATCHNative */ = {isa = PBXNativeTarget; buildConfigurationList = 180000000000000000000006 /* Build configuration list for PBXNativeTarget "LATCHNative" */; buildPhases = (140000000000000000000006 /* Sources */, 110000000000000000000006 /* Frameworks */, 130000000000000000000006 /* Headers */,); buildRules = (); dependencies = (); fileSystemSynchronizedGroups = (E00000000000000000000006 /* LATCHNative */,); name = LATCHNative; packageProductDependencies = (); productName = LATCHNative; productReference = D00000000000000000000006 /* libLATCHNative.a */; productType = "com.apple.product-type.library.static"; };
+		B00000000000000000000007 /* LATCHTests */ = {isa = PBXNativeTarget; buildConfigurationList = 180000000000000000000007 /* Build configuration list for PBXNativeTarget "LATCHTests" */; buildPhases = (140000000000000000000007 /* Sources */, 110000000000000000000007 /* Frameworks */, 150000000000000000000007 /* Resources */,); buildRules = (); dependencies = (16000000000000000000000A /* PBXTargetDependency */,); fileSystemSynchronizedGroups = (E00000000000000000000007 /* LATCHTests */,); name = LATCHTests; packageProductDependencies = (); productName = LATCHTests; productReference = D00000000000000000000007 /* LATCHTests.xctest */; productType = "com.apple.product-type.bundle.unit-test"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F00000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2660; LastUpgradeCheck = 2660; TargetAttributes = {B00000000000000000000001 = {CreatedOnToolsVersion = 26.6;}; B00000000000000000000002 = {CreatedOnToolsVersion = 26.6;}; B00000000000000000000003 = {CreatedOnToolsVersion = 26.6;}; B00000000000000000000004 = {CreatedOnToolsVersion = 26.6;}; B00000000000000000000005 = {CreatedOnToolsVersion = 26.6;}; B00000000000000000000006 = {CreatedOnToolsVersion = 26.6;}; B00000000000000000000007 = {CreatedOnToolsVersion = 26.6;};};}; buildConfigurationList = 180000000000000000000000 /* Build configuration list for PBXProject "LATCH" */; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base,); mainGroup = 120000000000000000000001; minimizedProjectReferenceProxies = 1; preferredProjectObjectVersion = 77; productRefGroup = 120000000000000000000002 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (B00000000000000000000001 /* LATCH */, B00000000000000000000002 /* LATCHDaemon */, B00000000000000000000003 /* LATCHAgent */, B00000000000000000000004 /* LATCHProbe */, B00000000000000000000005 /* LATCHShared */, B00000000000000000000006 /* LATCHNative */, B00000000000000000000007 /* LATCHTests */,); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		150000000000000000000001 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000007 /* Assets.xcassets in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
+		150000000000000000000007 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		140000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		140000000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		140000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		140000000000000000000004 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		140000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		140000000000000000000006 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		140000000000000000000007 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		160000000000000000000001 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000005 /* LATCHShared */; targetProxy = C00000000000000000000001 /* PBXContainerItemProxy */; };
+		160000000000000000000002 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000005 /* LATCHShared */; targetProxy = C00000000000000000000002 /* PBXContainerItemProxy */; };
+		160000000000000000000003 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000005 /* LATCHShared */; targetProxy = C00000000000000000000003 /* PBXContainerItemProxy */; };
+		160000000000000000000004 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000006 /* LATCHNative */; targetProxy = C00000000000000000000004 /* PBXContainerItemProxy */; };
+		160000000000000000000005 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000005 /* LATCHShared */; targetProxy = C00000000000000000000005 /* PBXContainerItemProxy */; };
+		160000000000000000000006 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000006 /* LATCHNative */; targetProxy = C00000000000000000000006 /* PBXContainerItemProxy */; };
+		160000000000000000000007 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000002 /* LATCHDaemon */; targetProxy = C00000000000000000000007 /* PBXContainerItemProxy */; };
+		160000000000000000000008 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000003 /* LATCHAgent */; targetProxy = C00000000000000000000008 /* PBXContainerItemProxy */; };
+		160000000000000000000009 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000004 /* LATCHProbe */; targetProxy = C00000000000000000000009 /* PBXContainerItemProxy */; };
+		16000000000000000000000A /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B00000000000000000000005 /* LATCHShared */; targetProxy = C0000000000000000000000A /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		170000000000000000000000 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; DEVELOPMENT_TEAM = DR8RRE2NCU; ENABLE_HARDENED_RUNTIME = YES; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_OPTIMIZATION_LEVEL = 0; MACOSX_DEPLOYMENT_TARGET = 15.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = macosx; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 6.0;}; name = Debug; };
+		170000000000000000000001 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; DEVELOPMENT_TEAM = DR8RRE2NCU; ENABLE_HARDENED_RUNTIME = YES; GCC_C_LANGUAGE_STANDARD = gnu17; MACOSX_DEPLOYMENT_TARGET = 15.0; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_VERSION = 6.0;}; name = Release; };
+		170000000000000000000010 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_APP_SANDBOX = NO; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Packaging/App-Info.plist; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch; PRODUCT_NAME = LATCH;}; name = Debug; };
+		170000000000000000000011 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_APP_SANDBOX = NO; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Packaging/App-Info.plist; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch; PRODUCT_NAME = LATCH;}; name = Release; };
+		170000000000000000000020 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/LATCHNative/include"; OTHER_CODE_SIGN_FLAGS = "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)"; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch.daemon; PRODUCT_NAME = LATCHDaemon;}; name = Debug; };
+		170000000000000000000021 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/LATCHNative/include"; OTHER_CODE_SIGN_FLAGS = "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)"; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch.daemon; PRODUCT_NAME = LATCHDaemon;}; name = Release; };
+		170000000000000000000030 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; OTHER_CODE_SIGN_FLAGS = "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)"; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch.agent; PRODUCT_NAME = LATCHAgent;}; name = Debug; };
+		170000000000000000000031 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; OTHER_CODE_SIGN_FLAGS = "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)"; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch.agent; PRODUCT_NAME = LATCHAgent;}; name = Release; };
+		170000000000000000000040 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/LATCHNative/include"; OTHER_CODE_SIGN_FLAGS = "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)"; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch.probe; PRODUCT_NAME = LATCHProbe;}; name = Debug; };
+		170000000000000000000041 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/LATCHNative/include"; OTHER_CODE_SIGN_FLAGS = "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)"; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch.probe; PRODUCT_NAME = LATCHProbe;}; name = Release; };
+		170000000000000000000050 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {DEFINES_MODULE = YES; PRODUCT_NAME = LATCHShared; SKIP_INSTALL = YES;}; name = Debug; };
+		170000000000000000000051 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {DEFINES_MODULE = YES; PRODUCT_NAME = LATCHShared; SKIP_INSTALL = YES;}; name = Release; };
+		170000000000000000000060 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; DEFINES_MODULE = YES; HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/LATCHNative/include"; MODULEMAP_FILE = "$(SRCROOT)/Sources/LATCHNative/include/module.modulemap"; PRODUCT_NAME = LATCHNative; PUBLIC_HEADERS_FOLDER_PATH = include/LATCHNative; SKIP_INSTALL = YES;}; name = Debug; };
+		170000000000000000000061 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; DEFINES_MODULE = YES; HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/LATCHNative/include"; MODULEMAP_FILE = "$(SRCROOT)/Sources/LATCHNative/include/module.modulemap"; PRODUCT_NAME = LATCHNative; PUBLIC_HEADERS_FOLDER_PATH = include/LATCHNative; SKIP_INSTALL = YES;}; name = Release; };
+		170000000000000000000070 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch.tests; PRODUCT_NAME = LATCHTests;}; name = Debug; };
+		170000000000000000000071 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.github.letsrokk.latch.tests; PRODUCT_NAME = LATCHTests;}; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		180000000000000000000000 /* Build configuration list for PBXProject "LATCH" */ = {isa = XCConfigurationList; buildConfigurations = (170000000000000000000000 /* Debug */, 170000000000000000000001 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		180000000000000000000001 /* Build configuration list for PBXNativeTarget "LATCH" */ = {isa = XCConfigurationList; buildConfigurations = (170000000000000000000010 /* Debug */, 170000000000000000000011 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		180000000000000000000002 /* Build configuration list for PBXNativeTarget "LATCHDaemon" */ = {isa = XCConfigurationList; buildConfigurations = (170000000000000000000020 /* Debug */, 170000000000000000000021 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		180000000000000000000003 /* Build configuration list for PBXNativeTarget "LATCHAgent" */ = {isa = XCConfigurationList; buildConfigurations = (170000000000000000000030 /* Debug */, 170000000000000000000031 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		180000000000000000000004 /* Build configuration list for PBXNativeTarget "LATCHProbe" */ = {isa = XCConfigurationList; buildConfigurations = (170000000000000000000040 /* Debug */, 170000000000000000000041 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		180000000000000000000005 /* Build configuration list for PBXNativeTarget "LATCHShared" */ = {isa = XCConfigurationList; buildConfigurations = (170000000000000000000050 /* Debug */, 170000000000000000000051 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		180000000000000000000006 /* Build configuration list for PBXNativeTarget "LATCHNative" */ = {isa = XCConfigurationList; buildConfigurations = (170000000000000000000060 /* Debug */, 170000000000000000000061 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		180000000000000000000007 /* Build configuration list for PBXNativeTarget "LATCHTests" */ = {isa = XCConfigurationList; buildConfigurations = (170000000000000000000070 /* Debug */, 170000000000000000000071 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = F00000000000000000000001 /* Project object */;
+}

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">LATCH app icon</title>
+  <desc id="description">A network drive above a controlled recovery vortex.</desc>
+
+  <rect width="1024" height="1024" rx="220" fill="#071F49"/>
+
+  <path
+    fill="#1877F2"
+    d="M69 518c52-72 127-125 219-158-59 70-85 143-60 211 53 144 296 213 505 130-91 124-291 180-473 117C91 759 22 630 69 518Z"
+  />
+  <path
+    fill="#65E1CC"
+    d="M824 462c119 65 158 193 101 307-76 152-289 230-529 191 181-8 352-73 431-176 83-108 76-222-3-322Z"
+  />
+  <path
+    fill="#2FBDEC"
+    d="M236 641c114-91 344-111 505-43 103 43 130 110 77 171-25 29-67 52-117 68 61-54 63-103 5-137-101-59-293-47-402 21-46 29-62 65-40 101-77-44-88-120-28-181Z"
+  />
+  <path
+    fill="#65E1CC"
+    d="M319 742c78-66 220-78 325-29-83-12-171 6-227 48-49 36-48 78 8 111-107-18-166-79-106-130Z"
+  />
+
+  <path
+    fill="#EFF3F8"
+    d="M329 137h366c42 0 70 24 80 65l54 231v118c0 51-37 88-88 88H283c-51 0-88-37-88-88V433l54-231c10-41 38-65 80-65Z"
+  />
+  <rect x="226" y="414" width="572" height="173" rx="47" fill="#071F49"/>
+
+  <g fill="none" stroke="#1877F2" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m407 325 105-111 105 111"/>
+    <path d="M407 325h210"/>
+  </g>
+  <g fill="#1877F2">
+    <circle cx="512" cy="214" r="47"/>
+    <circle cx="407" cy="325" r="47"/>
+    <circle cx="617" cy="325" r="47"/>
+  </g>
+  <circle cx="731" cy="500" r="22" fill="#65E1CC"/>
+</svg>

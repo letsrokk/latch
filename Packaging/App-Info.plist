@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>LATCH</string>
+    <key>CFBundleIconFile</key><string>LATCH.icns</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>LATCH</string>
+    <key>CFBundleDisplayName</key><string>LATCH</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+    <key>LSUIElement</key><true/>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>LATCH checks configured network volumes and safely recovers only confirmed stale NFS mounts.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>LATCH discovers NFS servers you already advertise on the local network and can send Wake-on-LAN packets to configured servers.</string>
+    <key>NSBonjourServices</key>
+    <array><string>_nfs._tcp</string></array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.github.letsrokk.latch.configuration</string>
+            <key>UTTypeDescription</key><string>LATCH Configuration</string>
+            <key>UTTypeConformsTo</key><array><string>public.json</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict><key>public.filename-extension</key><array><string>latchconfig</string></array></dict>
+        </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>LATCH Configuration</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSItemContentTypes</key><array><string>com.github.letsrokk.latch.configuration</string></array>
+        </dict>
+    </array>
+    <key>LATCHTeamIdentifier</key><string>$(DEVELOPMENT_TEAM)</string>
+    <key>LATCHSupportsAtomicReplacementPreparation</key><true/>
+</dict>
+</plist>

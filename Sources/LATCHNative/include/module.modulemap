@@ -1,0 +1,4 @@
+module LATCHNative {
+    header "LATCHNative.h"
+    export *
+}

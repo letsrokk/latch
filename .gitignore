@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager and Xcode
+.build/
+.build/xcode-derived-data/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.swiftpm/configuration/mirrors.json
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+
+# Packaged application output
+dist/
+
+# Local development and review artifacts
+.design-audit/
+.superpowers/
