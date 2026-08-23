@@ -23,10 +23,13 @@ make help
 make test
 make test FILTER=XPCTests
 make app
+make dmg APP=dist/LATCH.app DMG=dist/LATCH.dmg
 make check
 ```
 
 `make app` builds the Xcode `LATCH` scheme and stages its signed product at `dist/LATCH.app`. Pass `CONFIG=release` to stage an optimized Development-signed bundle. `make build` leaves the product in Xcode derived data when you only need a compiled target.
+
+`make dmg` packages an already built `dist/LATCH.app` into `dist/LATCH.dmg` for local distribution. Override `APP` or `DMG` to choose a different source app or output path.
 
 ```bash
 make app CONFIG=release

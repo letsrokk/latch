@@ -4,6 +4,7 @@ SHELL := /bin/zsh
 CONFIG ?= debug
 OUTPUT ?= $(CURDIR)/dist
 APP ?= $(OUTPUT)/LATCH.app
+DMG ?= $(OUTPUT)/LATCH.dmg
 
 PROJECT := $(CURDIR)/LATCH.xcodeproj
 SCHEME := LATCH
@@ -14,8 +15,9 @@ BUILT_APP := $(DERIVED_DATA)/Build/Products/$(XCODE_CONFIG)/LATCH.app
 SCRIPT_TESTS := \
 	Tests/BuildScripts/atomic-app-replacement-test.sh \
 	Tests/BuildScripts/stage-xcode-app-test.sh \
+	Tests/BuildScripts/package-dmg-script-test.sh \
 
-.PHONY: help validate-config script-tests test build app release check notarize clean system-test
+.PHONY: help validate-config script-tests test build app release dmg check notarize clean system-test
 
 help:
 	@printf '%s\n' \
@@ -24,6 +26,8 @@ help:
 		'  make test [FILTER=XPCTests]                 Run Xcode tests or a filtered selection.' \
 		'  make build [CONFIG=debug|release]           Build the LATCH Xcode scheme.' \
 		'  make app [CONFIG=debug|release]             Stage the signed Xcode product.' \
+		'  make dmg [APP=./dist/LATCH.app]' \
+		'                                                Package an existing app into a DMG.' \
 		'  make release SIGNING_IDENTITY="..." TEAM_ID="..."' \
 		'                                                Build and stage a release-signed app.' \
 		'  make check                                  Run project, script, unit, and bundle checks.' \
@@ -35,7 +39,8 @@ help:
 		'Variables:' \
 		'  CONFIG=debug                                Build configuration.' \
 		'  OUTPUT=./dist                               App output directory.' \
-		'  APP=./dist/LATCH.app                       Existing app for release/notarize.'
+		'  APP=./dist/LATCH.app                       Existing app for release/notarize/dmg.' \
+		'  DMG=./dist/LATCH.dmg                        DMG output path.'
 
 validate-config:
 	@[[ "$(CONFIG)" == debug || "$(CONFIG)" == release ]] || { print -u2 'CONFIG must be debug or release.'; exit 64; }
@@ -55,6 +60,11 @@ build: validate-config
 
 app: build
 	/bin/zsh ./scripts/stage-xcode-app.sh "$(BUILT_APP)" "$(OUTPUT)"
+
+dmg:
+	@[[ -d "$(APP)" ]] || { print -u2 'APP must be an existing .app bundle path.'; exit 66; }
+	@[[ "$(APP)" == *.app ]] || { print -u2 'APP must be an existing .app bundle path.'; exit 66; }
+	/bin/zsh ./scripts/package-dmg.sh "$(APP)" "$(DMG)"
 
 release:
 	@[[ -n "$(SIGNING_IDENTITY)" ]] || { print -u2 'SIGNING_IDENTITY is required.'; exit 64; }
