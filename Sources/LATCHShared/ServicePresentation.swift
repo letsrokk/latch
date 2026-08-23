@@ -256,12 +256,12 @@ public struct ManagedServiceController {
     }
 
     public func remove(_ service: any ManagedServiceControlling) async -> ManagedServiceActionOutcome {
-        if service.managedState == .notRegistered { return .removed }
+        if service.managedState == .notRegistered || service.managedState == .notFound { return .removed }
         do {
             try await service.unregister()
             return .removed
         } catch {
-            if service.managedState == .notRegistered { return .removed }
+            if service.managedState == .notRegistered || service.managedState == .notFound { return .removed }
             return .failed(error.localizedDescription)
         }
     }

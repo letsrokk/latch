@@ -350,6 +350,15 @@ struct ServiceManagementTests {
         #expect(service.unregisterCount == 1)
     }
 
+    @Test func removingANotFoundServiceReportsRemovalWithoutUnregistering() async {
+        let service = FakeManagedService(state: .notFound, registerResult: .notFound)
+
+        let outcome = await ManagedServiceController().remove(service)
+
+        #expect(outcome == .removed)
+        #expect(service.unregisterCount == 0)
+    }
+
     @Test func uninstallAttemptsLoginAgentAndDaemonWhenOneRemovalFails() async {
         let agent = FakeManagedService(state: .enabled, registerResult: .enabled, unregisterError: .removalFailed)
         let daemon = FakeManagedService(state: .enabled, registerResult: .enabled)

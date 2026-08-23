@@ -216,9 +216,12 @@ final class AppModel: ObservableObject {
 
         for _ in 0..<40 {
             syncServiceStates()
-            if daemonServiceState == .notRegistered,
-               agentServiceState == .notRegistered,
-               mainApplicationServiceState == .notRegistered {
+            let remainingServices = ManagedServicesUninstallPlan(
+                daemon: daemonServiceState,
+                loginAgent: agentServiceState,
+                mainApplication: mainApplicationServiceState
+            )
+            if !remainingServices.isAvailable {
                 try? Data("ready\n".utf8).write(to: URL(fileURLWithPath: markerPath), options: .atomic)
                 return
             }
