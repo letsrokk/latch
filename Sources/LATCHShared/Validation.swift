@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-public enum ConfigurationValidationError: String, Error, Sendable, Equatable {
+public enum ConfigurationValidationError: String, Error, Sendable, Equatable, LocalizedError {
     case unsupportedSchemaVersion
     case duplicateID
     case duplicateSource
@@ -23,6 +23,32 @@ public enum ConfigurationValidationError: String, Error, Sendable, Equatable {
     case invalidNetworkRule
     case invalidWakeOnLAN
     case invalidPostMountAction
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedSchemaVersion: "The configuration schema version is not supported."
+        case .duplicateID: "This mount identifier is already in use."
+        case .duplicateSource: "LATCH already manages this NFS share. Edit the existing mount instead."
+        case .duplicateMountPoint: "LATCH already uses this mount folder. Choose another empty folder."
+        case .invalidDisplayName: "Enter a display name."
+        case .invalidHost: "Enter a valid NFS server hostname without spaces, colons, or slashes."
+        case .invalidExportPath: "Enter an absolute export path that starts with '/'."
+        case .invalidMountPoint: "Enter an absolute mount folder that starts with '/'."
+        case .mountPointOutsideApprovedRoot: "Choose a mount folder under /Users or /Volumes/Media."
+        case .symlinkMountPoint: "The mount folder must not be a symbolic link."
+        case .invalidTiming: "Enter valid probe and recovery timing values."
+        case .duplicateDependencyID: "Recovery dependencies must have unique identifiers."
+        case .invalidDependency: "Review each recovery dependency and provide valid values."
+        case .externalSourceConflict: "This NFS share is already mounted outside LATCH. LATCH currently requires exclusive ownership of a share. Unmount the existing mount, then try again."
+        case .externalMountPointConflict: "This mount folder is already used by another NFS mount. Unmount it or choose another empty folder."
+        case .missingServerReference: "Choose a server before saving this mount."
+        case .duplicateServerID: "A server with this identifier already exists."
+        case .duplicateServerHostname: "A server with this hostname already exists."
+        case .invalidNetworkRule: "This network rule is invalid."
+        case .invalidWakeOnLAN: "Wake-on-LAN settings are invalid."
+        case .invalidPostMountAction: "A post-mount action is invalid."
+        }
+    }
 }
 
 public struct ConfigurationValidator: Sendable {

@@ -253,8 +253,8 @@ final class AppModel: ObservableObject {
             if let exportPath = arguments.first(where: { $0.hasPrefix("--debug-export-path=") })?.split(separator: "=", maxSplits: 1).last {
                 draft.exportPath = String(exportPath)
             }
-            await save(draft)
-            guard errorMessage == nil else { return }
+            let result = await save(draft)
+            guard result == .saved else { return }
             await action(.mount, definition: draft.definition())
         }
 

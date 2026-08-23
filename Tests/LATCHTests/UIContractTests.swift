@@ -195,6 +195,14 @@ struct UIContractTests {
         #expect(!presentation.canSelectServer)
     }
 
+    @Test func mountEditorSaveResultCarriesFailureMessage() {
+        let saved = MountEditorSaveResult.saved
+        let failed = MountEditorSaveResult.failed("The mount was not saved.")
+
+        #expect(saved.failureMessage == nil)
+        #expect(failed.failureMessage == "The mount was not saved.")
+    }
+
     @Test func mountEditorOffersItsServerPickerWhenServersAreAvailable() {
         let presentation = MountServerSelectionPresentation(availableServerCount: 2)
 

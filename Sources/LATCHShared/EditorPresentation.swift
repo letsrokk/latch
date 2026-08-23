@@ -330,6 +330,16 @@ public struct SavedMountTransition: Sendable, Equatable {
     }
 }
 
+public enum MountEditorSaveResult: Sendable, Equatable {
+    case saved
+    case failed(String)
+
+    public var failureMessage: String? {
+        if case .failed(let message) = self { return message }
+        return nil
+    }
+}
+
 public enum MountRemovalDisposition: Sendable, Equatable {
     case remove
     case requiresConfirmation

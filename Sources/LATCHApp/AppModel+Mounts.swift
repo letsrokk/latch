@@ -3,22 +3,18 @@ import LATCHShared
 
 @MainActor
 extension AppModel {
-    func save(_ draft: MountDraft) async {
-        _ = await save(draft, creating: nil)
+    func save(_ draft: MountDraft) async -> MountEditorSaveResult {
+        await save(draft, creating: nil)
     }
 
-    func save(_ draft: MountDraft, creating server: NFSServerProfile?) async -> Bool {
+    func save(_ draft: MountDraft, creating server: NFSServerProfile?) async -> MountEditorSaveResult {
         do {
             let request: LATCHRequest = if let server { .saveServerAndDefinition(server, draft.definition()) } else { .saveDefinition(draft.definition()) }
-            if case .failure(_, let detail) = try await send(request) {
-                errorMessage = detail
-                return false
-            }
+            if case .failure(_, let detail) = try await send(request) { return .failed(detail) }
             await refresh()
-            return true
+            return .saved
         } catch {
-            errorMessage = error.localizedDescription
-            return false
+            return .failed(error.localizedDescription)
         }
     }
 

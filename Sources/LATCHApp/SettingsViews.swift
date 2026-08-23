@@ -343,7 +343,7 @@ struct MountEditorView: View {
     @State var draft: MountDraft
     let servers: [NFSServerProfile]
     let initialServer: NFSServerProfile?
-    let save: (MountDraft, NFSServerProfile?) async -> Bool
+    let save: (MountDraft, NFSServerProfile?) async -> MountEditorSaveResult
     @Environment(\.dismiss) private var dismiss
     @State private var showReset = false
     @State private var monitoringExpanded = false
@@ -386,7 +386,7 @@ struct MountEditorView: View {
         )
     }
 
-    init(draft: MountDraft, servers: [NFSServerProfile], initialServer: NFSServerProfile? = nil, save: @escaping (MountDraft, NFSServerProfile?) async -> Bool) {
+    init(draft: MountDraft, servers: [NFSServerProfile], initialServer: NFSServerProfile? = nil, save: @escaping (MountDraft, NFSServerProfile?) async -> MountEditorSaveResult) {
         _draft = State(initialValue: draft)
         self.servers = servers
         self.initialServer = initialServer
@@ -530,7 +530,10 @@ struct MountEditorView: View {
             HStack {
                 if let submissionError {
                     Label(submissionError, systemImage: "exclamationmark.circle.fill")
-                        .font(.caption).foregroundStyle(.red).lineLimit(2)
+                        .font(.caption).foregroundStyle(.red)
+                        .lineLimit(nil)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(isSaving)
@@ -538,10 +541,11 @@ struct MountEditorView: View {
                     Task {
                         isSaving = true
                         submissionError = nil
-                        if await save(draft, initialServer) {
+                        switch await save(draft, initialServer) {
+                        case .saved:
                             dismiss()
-                        } else {
-                            submissionError = "The mount was not saved. Check the daemon status in Settings, then try again."
+                        case .failed(let detail):
+                            submissionError = detail
                         }
                         isSaving = false
                     }
