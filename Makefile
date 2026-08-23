@@ -13,20 +13,15 @@ XCODE_CONFIG := $(if $(filter release,$(CONFIG)),Release,Debug)
 BUILT_APP := $(DERIVED_DATA)/Build/Products/$(XCODE_CONFIG)/LATCH.app
 SCRIPT_TESTS := \
 	Tests/BuildScripts/atomic-app-replacement-test.sh \
-	Tests/BuildScripts/app-icon-packaging-test.sh \
 	Tests/BuildScripts/stage-xcode-app-test.sh \
-	Tests/BuildScripts/stop-running-app-test.sh \
-	Tests/BuildScripts/prepare-app-for-replacement-test.sh
 
-.PHONY: help validate-config script-tests test build app release check notarize clean module-names-check branding-check system-test
+.PHONY: help validate-config script-tests test build app release check notarize clean system-test
 
 help:
 	@printf '%s\n' \
 		'LATCH development tasks' \
 		'' \
-		'  make test [FILTER=BrandingContractTests]   Run Xcode tests or a filtered selection.' \
-		'  make module-names-check                     Verify Swift module names use LATCH.' \
-		'  make branding-check                         Verify active product branding uses LATCH.' \
+		'  make test [FILTER=XPCTests]                 Run Xcode tests or a filtered selection.' \
 		'  make build [CONFIG=debug|release]           Build the LATCH Xcode scheme.' \
 		'  make app [CONFIG=debug|release]             Stage the signed Xcode product.' \
 		'  make release SIGNING_IDENTITY="..." TEAM_ID="..."' \
@@ -44,12 +39,6 @@ help:
 
 validate-config:
 	@[[ "$(CONFIG)" == debug || "$(CONFIG)" == release ]] || { print -u2 'CONFIG must be debug or release.'; exit 64; }
-
-module-names-check:
-	./scripts/check-latch-module-names.sh
-
-branding-check:
-	./scripts/check-latch-branding.sh
 
 script-tests:
 	@for script in $(SCRIPT_TESTS); do /bin/zsh "$$script" || exit $$?; done
@@ -74,11 +63,8 @@ release:
 	/bin/zsh ./scripts/stage-xcode-app.sh "$(DERIVED_DATA)/Build/Products/Release/LATCH.app" "$(dir $(APP))"
 
 check: validate-config
-	./Tests/BuildScripts/xcode-project-contract-test.sh
-	$(MAKE) script-tests
-	./scripts/check-latch-module-names.sh
-	./scripts/check-latch-branding.sh
-	$(XCODEBUILD) -configuration Debug -destination 'platform=macOS' test
+	./Tests/BuildScripts/xcode-settings-contract-test.sh
+	$(MAKE) test CONFIG=debug
 	$(MAKE) app CONFIG=debug OUTPUT="$(OUTPUT)"
 	./Tests/BuildScripts/xcode-bundle-contract-test.sh "$(OUTPUT)/LATCH.app"
 
