@@ -213,6 +213,22 @@ public struct PersistenceHealthSnapshot: Codable, Sendable, Equatable {
     }
 
     public static let healthy = Self()
+
+    public func merged(with other: Self) -> Self {
+        let snapshots = [self, other]
+        let degradedSnapshots = snapshots.filter(\.isDegraded)
+        let failureCandidates = degradedSnapshots.isEmpty ? snapshots : degradedSnapshots
+        let newestFailure = failureCandidates.max {
+            ($0.lastFailureAt ?? .distantPast) < ($1.lastFailureAt ?? .distantPast)
+        } ?? self
+        return Self(
+            isDegraded: isDegraded || other.isDegraded,
+            lastFailureAt: newestFailure.lastFailureAt,
+            lastErrorDomain: newestFailure.lastErrorDomain,
+            lastErrorCode: newestFailure.lastErrorCode,
+            lastSuccessfulWriteAt: [lastSuccessfulWriteAt, other.lastSuccessfulWriteAt].compactMap { $0 }.max()
+        )
+    }
 }
 
 public struct ServiceStatusSnapshot: Codable, Sendable, Equatable {

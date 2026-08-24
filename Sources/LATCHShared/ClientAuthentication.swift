@@ -1,5 +1,37 @@
 import Foundation
 
+public enum DaemonClientRole: Sendable, Equatable {
+    case application
+    case agent
+}
+
+public enum DaemonXPCOperation: Sendable, Equatable {
+    case handleRequest
+    case subscribe
+    case registerApplicationCoordinator
+}
+
+public enum DaemonClientAuthorization {
+    public static func permits(_ operation: DaemonXPCOperation, for role: DaemonClientRole) -> Bool {
+        return switch (role, operation) {
+        case (.application, .handleRequest), (.application, .subscribe), (.agent, .handleRequest), (.agent, .registerApplicationCoordinator):
+            true
+        case (.application, .registerApplicationCoordinator), (.agent, .subscribe):
+            false
+        }
+    }
+
+    public static func permits(_ request: LATCHRequest, for role: DaemonClientRole) -> Bool {
+        guard role == .agent else { return true }
+        return switch request {
+        case .getStatus, .getRecentEvents:
+            true
+        default:
+            false
+        }
+    }
+}
+
 public struct ClientSigningPolicy: Sendable, Equatable {
     public let teamID: String
     public let bundleIdentifiers: Set<String>

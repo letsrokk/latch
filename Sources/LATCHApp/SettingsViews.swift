@@ -202,6 +202,7 @@ struct ExternalMountsScreen: View {
                 TableColumn("Options") { Text($0.options.joined(separator: ", ")).lineLimit(1) }
                 TableColumn("") { snapshot in Button("Configure") { configure(snapshot) } }
             }
+            .tableStyle(.inset(alternatesRowBackgrounds: false))
             .overlay {
                 if mounts.isEmpty {
                     ListEmptyStateView(.externalMounts)
@@ -253,6 +254,7 @@ struct ActivityScreen: View {
                 }
                 .width(min: 130, ideal: 155, max: 180)
             }
+            .tableStyle(.inset(alternatesRowBackgrounds: false))
             .overlay {
                 if events.isEmpty {
                     ListEmptyStateView(.activity)

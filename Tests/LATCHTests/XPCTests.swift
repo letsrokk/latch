@@ -4,6 +4,55 @@ import Testing
 
 @Suite("XPC envelope validation")
 struct XPCTests {
+    @Test func applicationRoleCanRequestAndSubscribeButCannotRegisterAgentEndpoint() {
+        #expect(DaemonClientAuthorization.permits(.handleRequest, for: .application))
+        #expect(DaemonClientAuthorization.permits(.subscribe, for: .application))
+        #expect(!DaemonClientAuthorization.permits(.registerApplicationCoordinator, for: .application))
+    }
+
+    @Test func agentRoleCanRegisterAndHandleOnlyNotificationReads() {
+        #expect(DaemonClientAuthorization.permits(.handleRequest, for: .agent))
+        #expect(!DaemonClientAuthorization.permits(.subscribe, for: .agent))
+        #expect(DaemonClientAuthorization.permits(.registerApplicationCoordinator, for: .agent))
+        #expect(DaemonClientAuthorization.permits(LATCHRequest.getStatus, for: .agent))
+        #expect(DaemonClientAuthorization.permits(LATCHRequest.getRecentEvents(limit: 100), for: .agent))
+
+        let id = UUID()
+        let server = NFSServerProfile(name: "NAS", hostname: "nas.local")
+        let definition = MountDefinition(
+            displayName: "Media",
+            serverID: server.id,
+            exportPath: "/media",
+            mountPoint: "/Volumes/Media"
+        )
+        let denied: [LATCHRequest] = [
+            .getServiceStatus,
+            .getConfiguration,
+            .exportPortableConfiguration,
+            .previewPortableConfiguration(Data()),
+            .applyPortableConfiguration(Data(), approvedServerIDs: [], approvedMountIDs: []),
+            .saveServer(server),
+            .saveServerAndDefinition(server, definition),
+            .removeServer(id),
+            .saveDefinition(definition),
+            .removeDefinition(id, confirmMounted: true),
+            .setEnabled(id, false),
+            .perform(id, .recover, confirmed: true),
+            .getOperations,
+            .getOperation(id),
+            .cancelOperation(id),
+            .clearEvents,
+            .getExternalMounts,
+            .getDiscoveredServers,
+            .wakeServer(id),
+            .verifyNetworkVolumesPermission,
+            .uninstall(unmountOwned: true, removeState: true, confirmed: true),
+        ]
+        for request in denied {
+            #expect(!DaemonClientAuthorization.permits(request, for: .agent))
+        }
+    }
+
     @Test func statusSinkDecodesLegacyStatusPayloads() throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let status = MountStatus(

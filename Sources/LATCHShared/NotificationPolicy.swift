@@ -6,6 +6,23 @@ public enum LATCHNotificationEvent: Sendable, Equatable {
     case prolongedUnavailable
 }
 
+public enum NotificationDelayPolicy {
+    public static let minuteRange = 1...60
+
+    public static func minutes(forSeconds seconds: Int) -> Int {
+        min(max(seconds / 60, minuteRange.lowerBound), minuteRange.upperBound)
+    }
+
+    public static func seconds(forMinutes minutes: Int) -> Int {
+        min(max(minutes, minuteRange.lowerBound), minuteRange.upperBound) * 60
+    }
+
+    public static func accessibilityValue(forSeconds seconds: Int) -> String {
+        let minutes = minutes(forSeconds: seconds)
+        return minutes == 1 ? "1 minute" : "\(minutes) minutes"
+    }
+}
+
 public enum NotificationPolicy {
     public static func event(previous: MountState?, current: MountState, unavailableSince: Date?, now: Date, unavailableThreshold: TimeInterval = 300) -> LATCHNotificationEvent? {
         if current == .failedClosed && previous != .failedClosed { return .recoveryFailed }

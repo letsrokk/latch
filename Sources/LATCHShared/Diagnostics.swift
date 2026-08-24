@@ -18,7 +18,7 @@ public enum DiagnosticExporter {
             "lastErrorCode": serviceStatus.persistenceHealth.lastErrorCode ?? NSNull()
         ]
         let sensitive = configuration.mounts.flatMap { definition in
-            [definition.host, definition.mountPoint] + definition.recoveryDependencies.flatMap { dependency -> [String] in
+            [definition.host, definition.exportPath, definition.mountPoint] + definition.recoveryDependencies.flatMap { dependency -> [String] in
                 switch dependency.kind {
                 case .dockerContainer(let value): [value.dockerSocketPath, value.composeFilePath].compactMap { $0 }
                 case .macApplication(let value): [value.applicationURL].compactMap { $0 }
@@ -35,7 +35,7 @@ public enum DiagnosticExporter {
                 "id": definition.id.uuidString,
                 "displayName": definition.displayName,
                 "host": "<redacted-host>",
-                "exportPath": definition.exportPath,
+                "exportPath": "<redacted-export-path>",
                 "mountPoint": redactedPath(definition.mountPoint),
                 "enabled": definition.enabled,
                 "options": definition.mountOptions.encoded,
@@ -82,7 +82,6 @@ public enum DiagnosticExporter {
     }
 
     private static func redactSource(_ source: String) -> String {
-        guard let separator = source.firstIndex(of: ":") else { return "<redacted-host>" }
-        return "<redacted-host>" + source[separator...]
+        source.contains(":") ? "<redacted-host>:<redacted-export-path>" : "<redacted-host>"
     }
 }

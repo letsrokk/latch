@@ -28,14 +28,25 @@ struct DiagnosticsTests {
             configuration: .init(mounts: [definition]),
             statuses: [],
             events: [],
-            externalMounts: [],
+            externalMounts: [
+                ExternalMountSnapshot(
+                    source: "other.private.local:/private/export",
+                    mountPoint: "/Volumes/External/Private",
+                    fileSystemType: "nfs",
+                    options: ["nosuid"]
+                )
+            ],
             serviceStatus: serviceStatus
         )
         let text = String(decoding: data, as: UTF8.self)
 
         #expect(!text.contains("/Users/private"))
         #expect(!text.contains("nas.private.local"))
+        #expect(!text.contains("/volume1/Movies"))
+        #expect(!text.contains("/private/export"))
+        #expect(!text.contains("other.private.local"))
         #expect(text.contains("<redacted-host>"))
+        #expect(text.contains("<redacted-export-path>"))
         #expect(text.contains("radarr"))
     }
 }

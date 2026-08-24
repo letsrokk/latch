@@ -4,6 +4,11 @@ import Testing
 
 @Suite("Option presentation contract")
 struct UIContractTests {
+    @Test func overviewHasItsOwnScreenIdentityAboveManagedMounts() {
+        #expect(LATCHOverviewHeaderPresentation.title == "Overview")
+        #expect(LATCHOverviewHeaderPresentation.subtitle == "Managed volume health and recent recovery activity.")
+    }
+
     @Test func runtimeSnapshotsApplyOnlyWhenTheirRevisionAdvances() {
         #expect(RuntimeSnapshotApplicationPolicy.shouldApply(candidateRevision: 1, after: nil))
         #expect(RuntimeSnapshotApplicationPolicy.shouldApply(candidateRevision: 9, after: 8))
@@ -52,6 +57,7 @@ struct UIContractTests {
         #expect(LATCHInterfaceCopy.exportDiagnosticsTitle == "Export Diagnostics")
         #expect(LATCHInterfaceCopy.exportConfigurationTitle == "Export Configuration")
         #expect(LATCHInterfaceCopy.importConfigurationTitle == "Import Configuration")
+        #expect(LATCHInterfaceCopy.persistenceDegradedMessage == "Persistent data is degraded. LATCH is using safe fallback data until a successful write restores storage health.")
     }
 
     @Test func addDialogsUseAddWhileEditDialogsKeepSave() {

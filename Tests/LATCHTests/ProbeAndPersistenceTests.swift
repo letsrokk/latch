@@ -81,6 +81,108 @@ struct ProbeAndPersistenceTests {
         #expect(try store.load() == expected)
     }
 
+    @Test func firstStartupWithoutConfigurationIsHealthyAndEmpty() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = ConfigurationStore(directory: root).loadForStartup()
+
+        #expect(result.configuration == LATCHConfiguration())
+        #expect(!result.persistenceHealth.isDegraded)
+    }
+
+    @Test func startupQuarantinesCorruptPrimaryAndUsesLastKnownGood() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ConfigurationStore(directory: root)
+        let expected = makeConfiguration()
+        try store.save(expected)
+        try Data("corrupt-primary".utf8).write(to: store.configurationURL)
+
+        let result = store.loadForStartup()
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.path)
+
+        #expect(result.configuration == expected)
+        #expect(result.persistenceHealth.isDegraded)
+        #expect(files.contains { $0.hasPrefix("config.corrupt-") && $0.hasSuffix(".json") })
+        #expect(!FileManager.default.fileExists(atPath: store.configurationURL.path))
+    }
+
+    @Test func startupWithTwoCorruptCopiesFailsClosedAndPreservesBoth() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ConfigurationStore(directory: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("corrupt-primary".utf8).write(to: store.configurationURL)
+        try Data("corrupt-backup".utf8).write(to: store.lastKnownGoodURL)
+
+        let result = store.loadForStartup()
+        let quarantineURLs = try FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.contains(".corrupt-") }
+
+        #expect(result.configuration == LATCHConfiguration())
+        #expect(result.persistenceHealth.isDegraded)
+        #expect(quarantineURLs.count == 2)
+        for url in quarantineURLs {
+            let permissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+            #expect(permissions == 0o600)
+        }
+    }
+
+    @Test func persistenceHealthMergeKeepsTheNewestFailureAndSuccess() {
+        let olderFailure = Date(timeIntervalSince1970: 100)
+        let newerFailure = Date(timeIntervalSince1970: 200)
+        let olderSuccess = Date(timeIntervalSince1970: 300)
+        let newerSuccess = Date(timeIntervalSince1970: 400)
+        let configurationHealth = PersistenceHealthSnapshot(
+            isDegraded: true,
+            lastFailureAt: olderFailure,
+            lastErrorDomain: "configuration",
+            lastErrorCode: 1,
+            lastSuccessfulWriteAt: newerSuccess
+        )
+        let runtimeHealth = PersistenceHealthSnapshot(
+            isDegraded: true,
+            lastFailureAt: newerFailure,
+            lastErrorDomain: "runtime",
+            lastErrorCode: 2,
+            lastSuccessfulWriteAt: olderSuccess
+        )
+
+        let merged = configurationHealth.merged(with: runtimeHealth)
+
+        #expect(merged.isDegraded)
+        #expect(merged.lastFailureAt == newerFailure)
+        #expect(merged.lastErrorDomain == "runtime")
+        #expect(merged.lastErrorCode == 2)
+        #expect(merged.lastSuccessfulWriteAt == newerSuccess)
+    }
+
+    @Test func persistenceHealthMergeReportsTheActiveFailureInsteadOfRecoveredHistory() {
+        let activeFailure = PersistenceHealthSnapshot(
+            isDegraded: true,
+            lastFailureAt: Date(timeIntervalSince1970: 100),
+            lastErrorDomain: "configuration",
+            lastErrorCode: 1
+        )
+        let recoveredHistory = PersistenceHealthSnapshot(
+            isDegraded: false,
+            lastFailureAt: Date(timeIntervalSince1970: 200),
+            lastErrorDomain: "runtime",
+            lastErrorCode: 2,
+            lastSuccessfulWriteAt: Date(timeIntervalSince1970: 300)
+        )
+
+        let merged = activeFailure.merged(with: recoveredHistory)
+
+        #expect(merged.isDegraded)
+        #expect(merged.lastFailureAt == Date(timeIntervalSince1970: 100))
+        #expect(merged.lastErrorDomain == "configuration")
+        #expect(merged.lastErrorCode == 1)
+    }
+
     @Test func saveDoesNotPromoteACorruptPrimaryOverLastKnownGood() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

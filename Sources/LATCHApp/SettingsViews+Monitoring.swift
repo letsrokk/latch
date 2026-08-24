@@ -49,6 +49,13 @@ struct LATCHSettingsScreen: View {
     @State private var approvedServerIDs: Set<UUID> = []
     @State private var approvedMountIDs: Set<UUID> = []
 
+    private var prolongedUnavailableMinutes: Binding<Int> {
+        Binding(
+            get: { NotificationDelayPolicy.minutes(forSeconds: prolongedUnavailableSeconds) },
+            set: { prolongedUnavailableSeconds = NotificationDelayPolicy.seconds(forMinutes: $0) }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScreenHeader(
@@ -64,7 +71,7 @@ struct LATCHSettingsScreen: View {
                         HStack(spacing: 10) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
-                            Text("Persistence store is degraded. Runtime recovery metadata is in memory only until writes resume.")
+                            Text(LATCHInterfaceCopy.persistenceDegradedMessage)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -95,17 +102,18 @@ struct LATCHSettingsScreen: View {
                     Toggle("Recovery and availability notifications", isOn: $notificationsEnabled)
                     HStack(spacing: 8) {
                         Text("Notify after")
-                        Text("\(prolongedUnavailableSeconds / 60)")
+                        Text("\(NotificationDelayPolicy.minutes(forSeconds: prolongedUnavailableSeconds))")
                             .monospacedDigit()
                             .frame(minWidth: 28)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 4)
                             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
                             .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator.opacity(0.9)))
-                        Stepper("", value: $prolongedUnavailableSeconds, in: 60...3600, step: 60)
+                        Stepper("", value: prolongedUnavailableMinutes, in: NotificationDelayPolicy.minuteRange)
                             .labelsHidden()
                             .fixedSize()
                             .accessibilityLabel("Notification delay in minutes")
+                            .accessibilityValue(NotificationDelayPolicy.accessibilityValue(forSeconds: prolongedUnavailableSeconds))
                         Text("minutes unavailable")
                         Spacer()
                     }

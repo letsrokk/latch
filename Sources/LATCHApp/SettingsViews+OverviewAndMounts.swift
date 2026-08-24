@@ -13,6 +13,11 @@ struct OverviewScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                ScreenHeader(
+                    title: LATCHOverviewHeaderPresentation.title,
+                    subtitle: LATCHOverviewHeaderPresentation.subtitle
+                )
+
                 if !overview.setupRequirements.isEmpty {
                     HStack(spacing: 16) {
                         Image(systemName: "exclamationmark.circle")
@@ -170,6 +175,7 @@ struct ManagedMountsScreen: View {
                 .width(min: 145, ideal: 170, max: 205)
 
             }
+            .tableStyle(.inset(alternatesRowBackgrounds: false))
             .overlay {
                 if definitions.isEmpty {
                     ListEmptyStateView(.managedMounts)
@@ -247,6 +253,7 @@ struct ServersScreen: View {
                     }
                 }
             }
+            .tableStyle(.inset(alternatesRowBackgrounds: false))
             .overlay {
                 if servers.isEmpty {
                     ListEmptyStateView(.servers)

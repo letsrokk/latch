@@ -1,5 +1,10 @@
 import Foundation
 
+public enum LATCHOverviewHeaderPresentation {
+    public static let title = "Overview"
+    public static let subtitle = "Managed volume health and recent recovery activity."
+}
+
 public enum LATCHSetupRequirement: String, Sendable, Equatable, CaseIterable {
     case privilegedDaemon
     case loginAgent

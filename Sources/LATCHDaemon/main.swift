@@ -2,20 +2,21 @@ import Foundation
 import LATCHShared
 import OSLog
 
-final class DaemonService: NSObject, LATCHXPCProtocol, NSXPCListenerDelegate {
+final class DaemonService: NSObject, NSXPCListenerDelegate {
     private let logger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "xpc")
     private let controller: DaemonController
-    private let validator: ClientCodeSignatureValidator
-    private let policy: ClientSigningPolicy
+    private let applicationValidator: ClientCodeSignatureValidator
+    private let agentValidator: ClientCodeSignatureValidator
+    private let applicationPolicy: ClientSigningPolicy
+    private let agentPolicy: ClientSigningPolicy
     private let broadcaster: StatusBroadcaster
     private let applicationCoordinator: AgentEndpointRegistry
     private let networkPathObserver: NetworkPathObserver
     private let systemWakeObserver: SystemWakeObserver
 
-    init(policy: ClientSigningPolicy) {
-        let broadcaster = StatusBroadcaster(policy: policy)
+    init(applicationPolicy: ClientSigningPolicy, agentPolicy: ClientSigningPolicy) {
+        let broadcaster = StatusBroadcaster(policy: applicationPolicy)
         self.broadcaster = broadcaster
-        let agentPolicy = ClientSigningPolicy(teamID: policy.teamID, bundleIdentifiers: [LATCHIdentity.agentIdentifier])
         let applicationCoordinator = AgentEndpointRegistry(policy: agentPolicy)
         self.applicationCoordinator = applicationCoordinator
         let dependencies = TypedDependencyOperator(applicationCoordinator: applicationCoordinator)
@@ -35,24 +36,34 @@ final class DaemonService: NSObject, LATCHXPCProtocol, NSXPCListenerDelegate {
         systemWakeObserver = SystemWakeObserver { [controller] in
             Task { await controller.networkPathChanged() }
         }
-        validator = ClientCodeSignatureValidator(policy: policy)
-        self.policy = policy
+        applicationValidator = ClientCodeSignatureValidator(policy: applicationPolicy)
+        agentValidator = ClientCodeSignatureValidator(policy: agentPolicy)
+        self.applicationPolicy = applicationPolicy
+        self.agentPolicy = agentPolicy
         Task { [controller] in await controller.start() }
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        connection.setCodeSigningRequirement(policy.codeSigningRequirement)
-        guard validator.accepts(processIdentifier: connection.processIdentifier) else {
+        let roleAndPolicy: (DaemonClientRole, ClientSigningPolicy)?
+        if applicationValidator.accepts(processIdentifier: connection.processIdentifier) {
+            roleAndPolicy = (.application, applicationPolicy)
+        } else if agentValidator.accepts(processIdentifier: connection.processIdentifier) {
+            roleAndPolicy = (.agent, agentPolicy)
+        } else {
+            roleAndPolicy = nil
+        }
+        guard let (role, policy) = roleAndPolicy else {
             logger.error("Rejected unauthorized XPC client")
             return false
         }
+        connection.setCodeSigningRequirement(policy.codeSigningRequirement)
         connection.exportedInterface = NSXPCInterface(with: LATCHXPCProtocol.self)
-        connection.exportedObject = self
+        connection.exportedObject = DaemonConnectionService(role: role, service: self)
         connection.resume()
         return true
     }
 
-    func handle(_ requestData: Data, reply: @escaping (Data) -> Void) {
+    fileprivate func handle(_ requestData: Data, reply: @escaping (Data) -> Void) {
         let replyBox = XPCReplyBox(reply)
         let controller = controller
         Task { [controller, requestData, replyBox] in
@@ -69,17 +80,65 @@ final class DaemonService: NSObject, LATCHXPCProtocol, NSXPCListenerDelegate {
         }
     }
 
-    func subscribe(_ endpoint: NSXPCListenerEndpoint, reply: @escaping (Bool) -> Void) {
+    fileprivate func subscribe(_ endpoint: NSXPCListenerEndpoint, reply: @escaping (Bool) -> Void) {
         broadcaster.add(endpoint: endpoint)
         reply(true)
     }
 
-    func registerApplicationCoordinator(_ endpoint: NSXPCListenerEndpoint, reply: @escaping (Bool) -> Void) {
+    fileprivate func registerApplicationCoordinator(_ endpoint: NSXPCListenerEndpoint, reply: @escaping (Bool) -> Void) {
         let becameAvailable = applicationCoordinator.register(endpoint: endpoint)
         reply(true)
         if becameAvailable {
             Task { [controller] in await controller.applicationCoordinatorBecameAvailable() }
         }
+    }
+}
+
+private final class DaemonConnectionService: NSObject, LATCHXPCProtocol {
+    private let role: DaemonClientRole
+    private let service: DaemonService
+
+    init(role: DaemonClientRole, service: DaemonService) {
+        self.role = role
+        self.service = service
+    }
+
+    func handle(_ requestData: Data, reply: @escaping (Data) -> Void) {
+        guard DaemonClientAuthorization.permits(.handleRequest, for: role) else {
+            let requestID = (try? XPCCodec.decodeEnvelope(requestData).requestID) ?? UUID()
+            let response = try? XPCCodec.encodeResponse(
+                .failure(.unauthorized, "This client cannot issue daemon requests."),
+                requestID: requestID
+            )
+            reply(response ?? Data())
+            return
+        }
+        if let envelope = try? XPCCodec.decodeEnvelope(requestData),
+           !DaemonClientAuthorization.permits(envelope.request, for: role) {
+            let response = try? XPCCodec.encodeResponse(
+                .failure(.unauthorized, "This client cannot issue that daemon request."),
+                requestID: envelope.requestID
+            )
+            reply(response ?? Data())
+            return
+        }
+        service.handle(requestData, reply: reply)
+    }
+
+    func subscribe(_ endpoint: NSXPCListenerEndpoint, reply: @escaping (Bool) -> Void) {
+        guard DaemonClientAuthorization.permits(.subscribe, for: role) else {
+            reply(false)
+            return
+        }
+        service.subscribe(endpoint, reply: reply)
+    }
+
+    func registerApplicationCoordinator(_ endpoint: NSXPCListenerEndpoint, reply: @escaping (Bool) -> Void) {
+        guard DaemonClientAuthorization.permits(.registerApplicationCoordinator, for: role) else {
+            reply(false)
+            return
+        }
+        service.registerApplicationCoordinator(endpoint, reply: reply)
     }
 }
 
@@ -285,8 +344,9 @@ private final class AgentConnectionHandle: @unchecked Sendable {
 }
 
 let teamID = CurrentCodeIdentity.teamID ?? "ADHOC"
-let identifiers: Set<String> = [LATCHIdentity.bundleIdentifier, LATCHIdentity.agentIdentifier]
-let service = DaemonService(policy: .init(teamID: teamID, bundleIdentifiers: identifiers))
+let applicationPolicy = ClientSigningPolicy(teamID: teamID, bundleIdentifiers: [LATCHIdentity.bundleIdentifier])
+let agentPolicy = ClientSigningPolicy(teamID: teamID, bundleIdentifiers: [LATCHIdentity.agentIdentifier])
+let service = DaemonService(applicationPolicy: applicationPolicy, agentPolicy: agentPolicy)
 let listener = NSXPCListener(machServiceName: LATCHIdentity.daemonIdentifier)
 listener.delegate = service
 listener.resume()

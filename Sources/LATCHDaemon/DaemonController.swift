@@ -35,7 +35,7 @@ actor DaemonController {
     let stateLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "mount")
     let recoveryLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "recovery")
     let persistenceLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "persistence")
-    let store = ConfigurationStore()
+    let store: ConfigurationStore
     let stateStore: RecoveryStateStore
     let table = DarwinMountTable()
     let mounts: SystemMountOperator
@@ -52,6 +52,7 @@ actor DaemonController {
     let discovery = BonjourNFSServerDiscovery()
     let mountWork = MountWorkCoordinator()
     var configuration: LATCHConfiguration
+    var configurationPersistenceHealth: PersistenceHealthSnapshot
     var statuses: [UUID: MountStatus] = [:]
     var events: [LATCHEvent] = []
     var networkVolumesVerification: NetworkVolumesVerificationState = .notChecked
@@ -78,6 +79,9 @@ actor DaemonController {
         onStatusesChanged: @escaping @Sendable ([MountStatus]) -> Void = { _ in },
         onEventsChanged: @escaping @Sendable ([LATCHEvent]) -> Void = { _ in }
     ) {
+        let store = ConfigurationStore()
+        self.store = store
+        let startupConfiguration = store.loadForStartup()
         let stateStore = RecoveryStateStore()
         self.stateStore = stateStore
         let mountOperator = SystemMountOperator(probeRunner: probeRunner)
@@ -94,7 +98,8 @@ actor DaemonController {
         let wakeOnLAN = WakeOnLANController(sender: NativeWakeOnLANPacketSender(), broadcasts: NativeIPv4BroadcastProvider(), state: stateStore)
         self.wakeOnLAN = wakeOnLAN
         automaticWake = AutomaticWakeOrchestrator(performer: NativeAutomaticWakePerformer(controller: wakeOnLAN, reachability: NativeNFSReachability()))
-        configuration = (try? store.load()) ?? LATCHConfiguration()
+        configuration = startupConfiguration.configuration
+        configurationPersistenceHealth = startupConfiguration.persistenceHealth
         self.onStatusesChanged = onStatusesChanged
         self.onEventsChanged = onEventsChanged
     }
@@ -127,7 +132,9 @@ actor DaemonController {
                     agentAuthorized: true,
                     agentOnline: agentIsOnline(),
                     networkVolumesVerification: networkVolumesVerification,
-                    persistenceHealth: await stateStore.persistenceHealthSnapshot()
+                    persistenceHealth: configurationPersistenceHealth.merged(
+                        with: await stateStore.persistenceHealthSnapshot()
+                    )
                 ))
             case .getStatus: return .statuses(Array(statuses.values))
             case .getConfiguration: return .configuration(configuration)
@@ -146,7 +153,7 @@ actor DaemonController {
                     liveMounts: try externalMounts()
                 )
                 invalidateMountWork(for: Set(configuration.mounts.map(\.id) + candidate.mounts.map(\.id)))
-                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try store.save($0) }
+                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
                 return .accepted
             case .saveServer(let server):
                 var candidate = configuration
@@ -154,7 +161,7 @@ actor DaemonController {
                 candidate.servers.append(server)
                 try ConfigurationValidator().validate(candidate, liveMounts: try externalMounts())
                 invalidateMountWork(for: configuration.mounts.map(\.id))
-                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try store.save($0) }
+                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
                 return .accepted
             case .saveServerAndDefinition(let server, let definition):
                 let isNew = !configuration.mounts.contains { $0.id == definition.id }
@@ -165,7 +172,7 @@ actor DaemonController {
                 candidate.mounts.append(definition)
                 try ConfigurationValidator().validate(candidate, liveMounts: try externalMounts())
                 invalidateMountWork(for: Set(configuration.mounts.map(\.id) + candidate.mounts.map(\.id)))
-                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try store.save($0) }
+                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
                 await finishSaving(definition, isNew: isNew)
                 return .accepted
             case .removeServer(let id):
@@ -175,7 +182,7 @@ actor DaemonController {
                 }
                 var candidate = configuration
                 candidate.servers.removeAll { $0.id == id }
-                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try store.save($0) }
+                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
                 return .accepted
             case .getExternalMounts: return .externalMounts(try externalMounts())
             case .getDiscoveredServers: return .discoveredServers(discovery.snapshots())
@@ -213,7 +220,7 @@ actor DaemonController {
                 candidate.mounts = updated
                 try ConfigurationValidator().validate(candidate, liveMounts: try externalMounts())
                 mountWork.invalidate(saved.id)
-                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try store.save($0) }
+                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
                 await finishSaving(saved, isNew: isNew)
                 return .accepted
             case .removeDefinition(let id, let confirmMounted):
@@ -234,7 +241,7 @@ actor DaemonController {
                 }
                 var candidate = configuration
                 candidate.mounts.removeAll { $0.id == id }
-                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try store.save($0) }
+                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
                 statuses[id] = nil
                 lastChecks[id] = nil
                 mountedAt[id] = nil
@@ -249,7 +256,7 @@ actor DaemonController {
                 mountWork.invalidate(id)
                 var candidate = configuration
                 candidate.mounts[index].enabled = enabled
-                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try store.save($0) }
+                try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
                 let _ = await withPersistenceIgnoreError { [weak self] in
                     try await self?.stateStore.setAutomaticRetryState(nil, for: id)
                 }
@@ -289,10 +296,10 @@ actor DaemonController {
                 }
                 if removeState {
                     try ConfigurationPersistenceTransaction.commit(LATCHConfiguration(), current: &configuration) { _ in
-                        try store.removeAllState()
+                        try removeAllPersistentState()
                     }
                 } else {
-                    try ConfigurationPersistenceTransaction.commit(disabledConfiguration, current: &configuration) { try store.save($0) }
+                    try ConfigurationPersistenceTransaction.commit(disabledConfiguration, current: &configuration) { try persistConfiguration($0) }
                 }
                 return .accepted
             }
@@ -300,6 +307,38 @@ actor DaemonController {
             logger.error("Request failed: \(error.localizedDescription, privacy: .public)")
             return .failure(.verificationFailed, error.localizedDescription)
         }
+    }
+
+    private func persistConfiguration(_ candidate: LATCHConfiguration) throws {
+        do {
+            try store.save(candidate)
+            configurationPersistenceHealth = PersistenceHealthSnapshot(lastSuccessfulWriteAt: Date())
+        } catch {
+            recordConfigurationPersistenceFailure(error)
+            throw error
+        }
+    }
+
+    private func removeAllPersistentState() throws {
+        do {
+            try store.removeAllState()
+            configurationPersistenceHealth = PersistenceHealthSnapshot(lastSuccessfulWriteAt: Date())
+        } catch {
+            recordConfigurationPersistenceFailure(error)
+            throw error
+        }
+    }
+
+    private func recordConfigurationPersistenceFailure(_ error: Error) {
+        let nsError = error as NSError
+        configurationPersistenceHealth = PersistenceHealthSnapshot(
+            isDegraded: true,
+            lastFailureAt: Date(),
+            lastErrorDomain: nsError.domain,
+            lastErrorCode: nsError.code,
+            lastSuccessfulWriteAt: configurationPersistenceHealth.lastSuccessfulWriteAt
+        )
+        persistenceLogger.notice("Configuration write failed: \(nsError.domain, privacy: .private) / \(nsError.code, privacy: .private)")
     }
 
     private func queueOperation(action: LATCHAction, definition: MountDefinition, confirmed: Bool) -> LATCHResponse {

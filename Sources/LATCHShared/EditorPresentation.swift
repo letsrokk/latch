@@ -98,6 +98,7 @@ public enum LATCHInterfaceCopy {
     public static let exportDiagnosticsTitle = "Export Diagnostics"
     public static let exportConfigurationTitle = "Export Configuration"
     public static let importConfigurationTitle = "Import Configuration"
+    public static let persistenceDegradedMessage = "Persistent data is degraded. LATCH is using safe fallback data until a successful write restores storage health."
 }
 
 public enum ServerAutomationIndicator: Sendable, Equatable {

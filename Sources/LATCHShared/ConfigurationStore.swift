@@ -53,6 +53,16 @@ struct FileRecoveryStateQuarantiner: RecoveryStateQuarantining {
 
 private let persistenceLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "persistence")
 
+public struct ConfigurationStartupLoad: Sendable, Equatable {
+    public let configuration: LATCHConfiguration
+    public let persistenceHealth: PersistenceHealthSnapshot
+
+    public init(configuration: LATCHConfiguration, persistenceHealth: PersistenceHealthSnapshot) {
+        self.configuration = configuration
+        self.persistenceHealth = persistenceHealth
+    }
+}
+
 public struct ConfigurationStore: Sendable {
     public let directory: URL
     public var configurationURL: URL { directory.appendingPathComponent("config.json") }
@@ -73,6 +83,80 @@ public struct ConfigurationStore: Sendable {
         } catch {
             return try loadConfiguration(from: lastKnownGoodURL)
         }
+    }
+
+    public func loadForStartup() -> ConfigurationStartupLoad {
+        let manager = FileManager.default
+        let primaryExists = manager.fileExists(atPath: configurationURL.path)
+        let backupExists = manager.fileExists(atPath: lastKnownGoodURL.path)
+        guard primaryExists || backupExists else {
+            return ConfigurationStartupLoad(configuration: LATCHConfiguration(), persistenceHealth: .healthy)
+        }
+
+        if primaryExists {
+            do {
+                return ConfigurationStartupLoad(
+                    configuration: try loadConfiguration(from: configurationURL),
+                    persistenceHealth: .healthy
+                )
+            } catch {
+                let primaryError = error
+                quarantine(configurationURL, label: "config")
+                if backupExists, let backup = try? loadConfiguration(from: lastKnownGoodURL) {
+                    return ConfigurationStartupLoad(
+                        configuration: backup,
+                        persistenceHealth: degradedHealth(for: primaryError)
+                    )
+                }
+                if backupExists { quarantine(lastKnownGoodURL, label: "config.last-known-good") }
+                return ConfigurationStartupLoad(
+                    configuration: LATCHConfiguration(),
+                    persistenceHealth: degradedHealth(for: primaryError)
+                )
+            }
+        }
+
+        do {
+            return ConfigurationStartupLoad(
+                configuration: try loadConfiguration(from: lastKnownGoodURL),
+                persistenceHealth: PersistenceHealthSnapshot(
+                    isDegraded: true,
+                    lastFailureAt: Date(),
+                    lastErrorDomain: NSCocoaErrorDomain,
+                    lastErrorCode: CocoaError.fileNoSuchFile.rawValue
+                )
+            )
+        } catch {
+            quarantine(lastKnownGoodURL, label: "config.last-known-good")
+            return ConfigurationStartupLoad(
+                configuration: LATCHConfiguration(),
+                persistenceHealth: degradedHealth(for: error)
+            )
+        }
+    }
+
+    private func quarantine(_ url: URL, label: String) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let destination = directory.appendingPathComponent("\(label).corrupt-\(UUID().uuidString).json")
+        do {
+            try FileManager.default.moveItem(at: url, to: destination)
+            guard chmod(destination.path, mode_t(0o600)) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EACCES)
+            }
+            persistenceLogger.error("Quarantined corrupt configuration at \(destination.path, privacy: .private(mask: .hash))")
+        } catch {
+            persistenceLogger.error("Could not fully quarantine corrupt configuration: \(error.localizedDescription, privacy: .private)")
+        }
+    }
+
+    private func degradedHealth(for error: Error) -> PersistenceHealthSnapshot {
+        let nsError = error as NSError
+        return PersistenceHealthSnapshot(
+            isDegraded: true,
+            lastFailureAt: Date(),
+            lastErrorDomain: nsError.domain,
+            lastErrorCode: nsError.code
+        )
     }
 
     private func loadConfiguration(from url: URL) throws -> LATCHConfiguration {
@@ -171,7 +255,10 @@ public struct ConfigurationStore: Sendable {
     public func removeAllState() throws {
         let manager = FileManager.default
         let quarantineURLs = (try? manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))?.filter {
-            $0.lastPathComponent.hasPrefix("state.corrupt-") && $0.pathExtension == "json"
+            ($0.lastPathComponent.hasPrefix("state.corrupt-")
+                || $0.lastPathComponent.hasPrefix("config.corrupt-")
+                || $0.lastPathComponent.hasPrefix("config.last-known-good.corrupt-"))
+                && $0.pathExtension == "json"
         } ?? []
         for url in [configurationURL, lastKnownGoodURL, schema1RollbackURL, directory.appendingPathComponent("state.json")] + quarantineURLs where manager.fileExists(atPath: url.path) {
             try manager.removeItem(at: url)

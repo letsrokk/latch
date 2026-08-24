@@ -4,6 +4,17 @@ import Testing
 
 @Suite("Notification policy")
 struct NotificationPolicyTests {
+    @Test func notificationDelayConvertsBetweenStoredSecondsAndDisplayedMinutes() {
+        #expect(NotificationDelayPolicy.minutes(forSeconds: 60) == 1)
+        #expect(NotificationDelayPolicy.minutes(forSeconds: 300) == 5)
+        #expect(NotificationDelayPolicy.seconds(forMinutes: 60) == 3_600)
+    }
+
+    @Test func notificationDelayProvidesMinuteBasedAccessibilityValues() {
+        #expect(NotificationDelayPolicy.accessibilityValue(forSeconds: 60) == "1 minute")
+        #expect(NotificationDelayPolicy.accessibilityValue(forSeconds: 300) == "5 minutes")
+    }
+
     @Test func failedClosedProducesUrgentFailure() {
         #expect(NotificationPolicy.event(previous: .healthy, current: .failedClosed, unavailableSince: nil, now: Date()) == .recoveryFailed)
     }
