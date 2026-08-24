@@ -4,6 +4,39 @@ import Testing
 
 @Suite("XPC envelope validation")
 struct XPCTests {
+    @Test func statusSinkDecodesLegacyStatusPayloads() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let status = MountStatus(
+            definitionID: UUID(),
+            observedSource: "nas.local:/media",
+            observedMountPoint: "/Volumes/Media",
+            state: .healthy,
+            lastProbe: date,
+            lastStateChange: date,
+            lastHealthyTime: date,
+            lastRecoveryTime: nil,
+            detail: "Healthy",
+            errorCode: .none
+        )
+        let data = try JSONEncoder().encode([status])
+
+        #expect(try LATCHStatusSinkCodec.decode(data) == .statuses([status]))
+    }
+
+    @Test func statusSinkDeliversLiveActivityPayloads() throws {
+        let event = LATCHEvent(
+            date: Date(timeIntervalSince1970: 1_800_000_000),
+            mountID: UUID(),
+            state: .networkUnavailable,
+            code: .networkUnavailable,
+            detail: "The server is unavailable."
+        )
+
+        let data = try LATCHStatusSinkCodec.encodeEvents([event])
+
+        #expect(try LATCHStatusSinkCodec.decode(data) == .events([event]))
+    }
+
     @Test func firstAgentRegistrationRequestsAnImmediateHealthCheck() {
         var availability = AgentConnectionAvailability()
 

@@ -64,8 +64,17 @@ actor DaemonController {
     var lastRuleSatisfaction: [UUID: Bool] = [:]
     let firstHealthCheckGrace: TimeInterval = 3
     let onStatusesChanged: @Sendable ([MountStatus]) -> Void
+    let onEventsChanged: @Sendable ([LATCHEvent]) -> Void
 
-    init(probeRunner: any ProbeRunning, agent: any AgentRequesting, agentIsOnline: @escaping @Sendable () -> Bool = { false }, dependencies: TypedDependencyOperator, networkSnapshots: any NetworkSnapshotProviding, onStatusesChanged: @escaping @Sendable ([MountStatus]) -> Void = { _ in }) {
+    init(
+        probeRunner: any ProbeRunning,
+        agent: any AgentRequesting,
+        agentIsOnline: @escaping @Sendable () -> Bool = { false },
+        dependencies: TypedDependencyOperator,
+        networkSnapshots: any NetworkSnapshotProviding,
+        onStatusesChanged: @escaping @Sendable ([MountStatus]) -> Void = { _ in },
+        onEventsChanged: @escaping @Sendable ([LATCHEvent]) -> Void = { _ in }
+    ) {
         let stateStore = RecoveryStateStore()
         self.stateStore = stateStore
         let mountOperator = SystemMountOperator(probeRunner: probeRunner)
@@ -83,6 +92,7 @@ actor DaemonController {
         automaticWake = AutomaticWakeOrchestrator(performer: NativeAutomaticWakePerformer(controller: wakeOnLAN, reachability: NativeNFSReachability()))
         configuration = (try? store.load()) ?? LATCHConfiguration()
         self.onStatusesChanged = onStatusesChanged
+        self.onEventsChanged = onEventsChanged
     }
 
     func start() {
@@ -174,12 +184,15 @@ actor DaemonController {
                 await recordWakeEvent(server: server, detail: "Sent a manual Wake-on-LAN request.")
                 return .accepted
             case .getRecentEvents(let limit): return .events(Array(events.suffix(max(0, min(limit, 500)))))
-			case .clearEvents:
-				let shouldClear = await withPersistenceIgnoreError { [weak self] in
-					try await self?.stateStore.clearEvents()
-				}
-				if shouldClear { events.removeAll() }
-				return .accepted
+            case .clearEvents:
+                let shouldClear = await withPersistenceIgnoreError { [weak self] in
+                    try await self?.stateStore.clearEvents()
+                }
+                if shouldClear {
+                    events.removeAll()
+                    onEventsChanged([])
+                }
+                return .accepted
             case .saveDefinition(let definition):
                 let isNew = !configuration.mounts.contains { $0.id == definition.id }
                 var updated = configuration.mounts.filter { $0.id != definition.id }
@@ -708,6 +721,7 @@ actor DaemonController {
         self.statuses = statuses.filter { id, _ in configuration.mounts.contains { $0.id == id } }
         self.events = Array(events.suffix(500))
         onStatusesChanged(Array(self.statuses.values))
+        onEventsChanged(Array(self.events.suffix(100)))
     }
 }
 

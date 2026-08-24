@@ -96,6 +96,37 @@ public enum LATCHResponse: Codable, Sendable, Equatable {
     case failure(LATCHErrorCode, String)
 }
 
+public enum LATCHStatusSinkUpdate: Sendable, Equatable {
+    case statuses([MountStatus])
+    case events([LATCHEvent])
+}
+
+public enum LATCHStatusSinkCodec {
+    private struct ActivityEnvelope: Codable {
+        let kind: String
+        let events: [LATCHEvent]
+    }
+
+    public static func encodeEvents(_ events: [LATCHEvent]) throws -> Data {
+        let data = try JSONEncoder().encode(ActivityEnvelope(kind: "events", events: events))
+        guard data.count <= XPCCodec.maximumMessageBytes else { throw XPCValidationError.oversized }
+        return data
+    }
+
+    public static func decode(_ data: Data) throws -> LATCHStatusSinkUpdate {
+        guard data.count <= XPCCodec.maximumMessageBytes else { throw XPCValidationError.oversized }
+        let decoder = JSONDecoder()
+        if let statuses = try? decoder.decode([MountStatus].self, from: data) {
+            return .statuses(statuses)
+        }
+        guard let envelope = try? decoder.decode(ActivityEnvelope.self, from: data),
+              envelope.kind == "events" else {
+            throw XPCValidationError.malformed
+        }
+        return .events(envelope.events)
+    }
+}
+
 public enum NetworkVolumesVerificationState: String, Codable, Sendable, Equatable {
     case notChecked
     case checking

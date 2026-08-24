@@ -76,10 +76,8 @@ struct LATCHMenu: View {
             Divider()
 
             HStack {
-                Button("Overview") { openMainWindow(destination: .overview) }
-                Button("Manage") { openMainWindow(destination: .settings) }
-                SettingsLink {
-                    Text("Preferences…")
+                ForEach(LATCHMenuFooterAction.allCases) { action in
+                    Button(action.title) { openMainWindow(destination: action.destination) }
                 }
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }

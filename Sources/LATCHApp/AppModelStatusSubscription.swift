@@ -6,9 +6,9 @@ final class StatusSubscription: NSObject, NSXPCListenerDelegate, LATCHStatusSink
     private let listener: NSXPCListener
     private let policy: ClientSigningPolicy
     private let validator: ClientCodeSignatureValidator
-    private let receive: @MainActor @Sendable ([MountStatus]) -> Void
+    private let receive: @MainActor @Sendable (LATCHStatusSinkUpdate) -> Void
 
-    init(policy: ClientSigningPolicy, receive: @escaping @MainActor @Sendable ([MountStatus]) -> Void) {
+    init(policy: ClientSigningPolicy, receive: @escaping @MainActor @Sendable (LATCHStatusSinkUpdate) -> Void) {
         self.policy = policy
         validator = ClientCodeSignatureValidator(policy: policy)
         self.receive = receive
@@ -29,8 +29,8 @@ final class StatusSubscription: NSObject, NSXPCListenerDelegate, LATCHStatusSink
     }
 
     func receiveStatus(_ statusData: Data) {
-        guard let statuses = try? JSONDecoder().decode([MountStatus].self, from: statusData) else { return }
-        Task { @MainActor [receive, statuses] in receive(statuses) }
+        guard let update = try? LATCHStatusSinkCodec.decode(statusData) else { return }
+        Task { @MainActor [receive, update] in receive(update) }
     }
 
     func cancel() {

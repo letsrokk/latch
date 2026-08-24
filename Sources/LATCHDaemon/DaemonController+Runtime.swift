@@ -346,6 +346,7 @@ extension DaemonController {
     func appendEvent(_ event: LATCHEvent) {
         events.append(event)
         if events.count > 500 { events.removeFirst(events.count - 500) }
+        onEventsChanged(Array(events.suffix(100)))
     }
 
     func persistRuntime() async {

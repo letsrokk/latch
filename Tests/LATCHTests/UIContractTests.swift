@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Option presentation contract")
 struct UIContractTests {
-    @Test func macOSAppDeclaresNativeSettingsCommandsAndMenuEntry() throws {
+    @Test func menuFooterRoutesMountsAndSettingsToTheMainWindowWithoutADuplicatePreferencesScene() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -12,10 +12,13 @@ struct UIContractTests {
         let appSource = try String(contentsOf: root.appending(path: "Sources/LATCHApp/LATCHApp.swift"), encoding: .utf8)
         let menuSource = try String(contentsOf: root.appending(path: "Sources/LATCHApp/MountViews.swift"), encoding: .utf8)
 
-        #expect(appSource.contains("Settings {"))
         #expect(appSource.contains(".commands {"))
         #expect(appSource.contains("LATCHCommands(model: model)"))
-        #expect(menuSource.contains("SettingsLink"))
+        #expect(!appSource.contains("Settings {"))
+        #expect(!menuSource.contains("SettingsLink"))
+        #expect(LATCHMenuFooterAction.allCases.map(\.title) == ["Overview", "Mounts", "Settings"])
+        #expect(LATCHMenuFooterAction.allCases.map(\.destination) == [.overview, .managed, .settings])
+        #expect(menuSource.contains("ForEach(LATCHMenuFooterAction.allCases)"))
     }
 
     @Test func monitoringSetupAndSupportCopyUsesFinalLabels() {
@@ -664,8 +667,26 @@ struct UIContractTests {
     }
 
     @Test func addFormUsesRecommendedValues() {
-        #expect(MountDraft.new.mountOptions == .recommended)
-        #expect(MountDraft.new.serverID != UUID())
+        let draft = MountDraft.new
+
+        #expect(draft.mountOptions == .recommended)
+        #expect(draft.serverID != UUID())
+        #expect(draft.probeIntervalSeconds == 30)
+        #expect(draft.probeTimeoutSeconds == 3)
+        #expect(draft.recoveryCooldownSeconds == 600)
+    }
+
+    @Test func newMountDefinitionsUseResponsiveTimingDefaults() {
+        let definition = MountDefinition(
+            displayName: "Archive",
+            host: "server.local",
+            exportPath: "/archive",
+            mountPoint: "/Volumes/Media/Archive"
+        )
+
+        #expect(definition.probeIntervalSeconds == 30)
+        #expect(definition.probeTimeoutSeconds == 3)
+        #expect(definition.recoveryCooldownSeconds == 600)
     }
 
     @Test func editFormPreservesPersistedValues() {

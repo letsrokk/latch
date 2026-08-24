@@ -103,7 +103,7 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled else { return }
             await self.requestNotificationAuthorization()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { return }
                 await self.refresh()
             }
@@ -346,8 +346,13 @@ final class AppModel: ObservableObject {
     private func establishStatusSubscription() {
         guard statusSubscription == nil, daemonService.status == .enabled else { return }
         let teamID = Bundle.main.object(forInfoDictionaryKey: "LATCHTeamIdentifier") as? String ?? "ADHOC"
-        let subscription = StatusSubscription(policy: .init(teamID: teamID, bundleIdentifiers: [LATCHIdentity.daemonIdentifier])) { [weak self] statuses in
-            self?.statuses = statuses
+        let subscription = StatusSubscription(policy: .init(teamID: teamID, bundleIdentifiers: [LATCHIdentity.daemonIdentifier])) { [weak self] update in
+            switch update {
+            case .statuses(let statuses):
+                self?.statuses = statuses
+            case .events(let events):
+                self?.events = LATCHEvent.newestFirst(events)
+            }
         }
         statusSubscription = subscription
         let connection = NSXPCConnection(machServiceName: LATCHIdentity.daemonIdentifier, options: .privileged)

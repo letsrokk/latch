@@ -57,12 +57,6 @@ struct LATCHApp: App {
         .commands {
             LATCHCommands(model: model)
         }
-
-        Settings {
-            LATCHPreferencesView()
-                .environmentObject(model)
-                .onAppear { model.start() }
-        }
     }
 }
 

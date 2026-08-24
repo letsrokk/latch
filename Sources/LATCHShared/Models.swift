@@ -184,8 +184,8 @@ public struct MountDefinition: Codable, Sendable, Equatable, Identifiable {
         mountPoint: String,
         mountOptions: NFSOptions = .recommended,
         enabled: Bool = true,
-        probeIntervalSeconds: Int = 60,
-        probeTimeoutSeconds: Int = 5,
+        probeIntervalSeconds: Int = 30,
+        probeTimeoutSeconds: Int = 3,
         recoveryCooldownSeconds: Int = 600,
         recoveryDependencies: [RecoveryDependency] = [],
         postMountActions: [PostMountAction] = []
@@ -213,8 +213,8 @@ public struct MountDefinition: Codable, Sendable, Equatable, Identifiable {
         mountPoint: String,
         mountOptions: NFSOptions = .recommended,
         enabled: Bool = true,
-        probeIntervalSeconds: Int = 60,
-        probeTimeoutSeconds: Int = 5,
+        probeIntervalSeconds: Int = 30,
+        probeTimeoutSeconds: Int = 3,
         recoveryCooldownSeconds: Int = 600,
         recoveryDependencies: [RecoveryDependency] = [],
         postMountActions: [PostMountAction] = []

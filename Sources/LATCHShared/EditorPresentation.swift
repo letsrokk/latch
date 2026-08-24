@@ -33,6 +33,30 @@ public enum LATCHMainDestination: String, CaseIterable, Identifiable, Hashable, 
     }
 }
 
+public enum LATCHMenuFooterAction: String, CaseIterable, Identifiable, Sendable {
+    case overview
+    case mounts
+    case settings
+
+    public var id: Self { self }
+
+    public var title: String {
+        switch self {
+        case .overview: "Overview"
+        case .mounts: "Mounts"
+        case .settings: "Settings"
+        }
+    }
+
+    public var destination: LATCHMainDestination {
+        switch self {
+        case .overview: .overview
+        case .mounts: .managed
+        case .settings: .settings
+        }
+    }
+}
+
 public struct LATCHMenuMountPresentation: Sendable, Equatable {
     public let name: String
     public let mountPoint: String

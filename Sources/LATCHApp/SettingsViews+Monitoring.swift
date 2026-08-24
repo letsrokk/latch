@@ -1,36 +1,6 @@
 import SwiftUI
 import LATCHShared
 
-struct LATCHPreferencesView: View {
-    @EnvironmentObject private var model: AppModel
-    @AppStorage("notificationsEnabled", store: UserDefaults(suiteName: LATCHIdentity.preferenceSuite)) private var notificationsEnabled = true
-    @AppStorage("prolongedUnavailableSeconds", store: UserDefaults(suiteName: LATCHIdentity.preferenceSuite)) private var prolongedUnavailableSeconds = 300
-
-    var body: some View {
-        Form {
-            Section("General") {
-                Toggle("Start LATCH at login", isOn: Binding(
-                    get: { model.startAtLoginEnabled },
-                    set: { enabled in Task { await model.setStartAtLogin(enabled) } }
-                ))
-            }
-            Section("Notifications") {
-                Toggle("Recovery and availability notifications", isOn: $notificationsEnabled)
-                Stepper(
-                    "Notify after \(prolongedUnavailableSeconds / 60) minutes unavailable",
-                    value: $prolongedUnavailableSeconds,
-                    in: 60...3_600,
-                    step: 60
-                )
-                .disabled(!notificationsEnabled)
-            }
-        }
-        .formStyle(.grouped)
-        .frame(width: 460, height: 240)
-        .scenePadding()
-    }
-}
-
 struct ScreenHeader: View {
     let title: String
     let subtitle: String

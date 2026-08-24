@@ -25,7 +25,8 @@ final class DaemonService: NSObject, LATCHXPCProtocol, NSXPCListenerDelegate {
             agentIsOnline: { applicationCoordinator.isAvailable },
             dependencies: dependencies,
             networkSnapshots: NativeNetworkSnapshotProvider(),
-            onStatusesChanged: { [broadcaster] statuses in broadcaster.broadcast(statuses) }
+            onStatusesChanged: { [broadcaster] statuses in broadcaster.broadcast(statuses) },
+            onEventsChanged: { [broadcaster] events in broadcaster.broadcast(events: events) }
         )
         self.controller = controller
         networkPathObserver = NetworkPathObserver { [controller] in
@@ -108,6 +109,15 @@ private final class StatusBroadcaster: @unchecked Sendable {
 
     func broadcast(_ statuses: [MountStatus]) {
         guard let data = try? JSONEncoder().encode(statuses) else { return }
+        send(data)
+    }
+
+    func broadcast(events: [LATCHEvent]) {
+        guard let data = try? LATCHStatusSinkCodec.encodeEvents(events) else { return }
+        send(data)
+    }
+
+    private func send(_ data: Data) {
         let snapshot = lock.withLock { Array(connections.values) }
         for connection in snapshot {
             (connection.remoteObjectProxy as? LATCHStatusSink)?.receiveStatus(data)
