@@ -11,6 +11,7 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
     private let policy: ClientSigningPolicy
     private let probeRunner: NativeProbeRunner
     private let postMountExecutor = DurablePostMountActionExecutor()
+    private let dockerExecutor = DockerCommandExecutor()
 
     init(policy: ClientSigningPolicy, probeURL: URL) {
         self.policy = policy
@@ -145,17 +146,20 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
             switch operation {
             case .prepare, .verify:
                 _ = try await executeDockerCommand(
-                    .init(docker: docker, command: ["inspect", "--format", "{{.Id}}", docker.containerName]),
+                    docker: docker,
+                    command: ["inspect", "--format", "{{.Id}}", docker.containerName],
                     timeout: 10
                 )
             case .stop(let timeout):
                 _ = try await executeDockerCommand(
-                    .init(docker: docker, command: ["stop", "--time", String(timeout), docker.containerName]),
+                    docker: docker,
+                    command: ["stop", "--time", String(timeout), docker.containerName],
                     timeout: timeout + 5
                 )
             case .start:
                 _ = try await executeDockerCommand(
-                    .init(docker: docker, command: ["start", docker.containerName]),
+                    docker: docker,
+                    command: ["start", docker.containerName],
                     timeout: 30
                 )
             case .isRunning:
@@ -260,47 +264,33 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
 
     @MainActor
     private func isDockerContainerRunning(docker: DockerContainerDependency, timeout: Int) async throws -> Bool {
-        let output = try await executeDockerCommand(.init(docker: docker, command: ["inspect", "--format", "{{.State.Running}}", docker.containerName]), timeout: timeout)
+        let output = try await executeDockerCommand(
+            docker: docker,
+            command: ["inspect", "--format", "{{.State.Running}}", docker.containerName],
+            timeout: timeout
+        )
         return try DockerInspectionPolicy.runningState(from: output)
     }
 
     @MainActor
-    private func executeDockerCommand(_ request: DockerCommandRequest, timeout: Int) async throws -> String {
-        let executable = try dockerExecutablePath()
-        let environment = dockerEnvironment(docker: request.docker)
+    private func executeDockerCommand(
+        docker: DockerContainerDependency,
+        command: [String],
+        timeout: Int
+    ) async throws -> String {
         do {
-            let result = try await BoundedProcessRunner.run(
-                executable: executable,
-                arguments: request.command,
-                environment: environment,
+            return try await dockerExecutor.execute(
+                arguments: command,
+                dependency: docker,
                 timeout: .seconds(timeout)
             )
-            guard result.terminationStatus == 0 else {
-                throw ApplicationCoordinatorError.dockerUnavailable(
-                    result.standardError.isEmpty ? "The Docker command failed." : result.standardError
-                )
-            }
-            return result.standardOutput
-        } catch BoundedProcessError.timedOut {
+        } catch DockerCommandExecutionError.missingRuntime {
+            throw ApplicationCoordinatorError.missingDockerRuntime
+        } catch DockerCommandExecutionError.timedOut {
             throw ApplicationCoordinatorError.dockerUnavailable("The Docker command timed out.")
+        } catch DockerCommandExecutionError.failed(let detail) {
+            throw ApplicationCoordinatorError.dockerUnavailable(detail)
         }
-    }
-
-    @MainActor
-    private func dockerEnvironment(docker: DockerContainerDependency) -> [String: String] {
-        var environment = [
-            "DOCKER_HOST": "unix://\(docker.dockerSocketPath)",
-            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        ]
-        if let compose = docker.composeFilePath { environment["COMPOSE_FILE"] = compose }
-        return environment
-    }
-
-    @MainActor
-    private func dockerExecutablePath() throws -> String {
-        let candidates = ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/Applications/Docker.app/Contents/Resources/bin/docker"]
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) { return path }
-        throw ApplicationCoordinatorError.missingDockerRuntime
     }
 
     private enum DependencyOperation {
@@ -309,11 +299,6 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
         case stop(timeout: Int)
         case start
         case verify
-    }
-
-    private struct DockerCommandRequest {
-        let docker: DockerContainerDependency
-        let command: [String]
     }
 
     @MainActor

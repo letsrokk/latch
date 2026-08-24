@@ -47,6 +47,34 @@ public protocol AgentRequesting: Sendable {
     func request(_ request: AgentRequest) async throws -> AgentResponse
 }
 
+public extension AgentRequesting {
+    /// Rechecks mount-operation ownership immediately before dispatching an
+    /// agent side effect. The underlying requester remains responsible for the
+    /// request-category deadline and transport invalidation policy.
+    func request(
+        _ request: AgentRequest,
+        cancellation: MountOperationCancellation
+    ) async throws -> AgentResponse {
+        try cancellation.throwIfCancelled()
+        return try await self.request(request)
+    }
+}
+
+public struct PostMountActionRequester: Sendable {
+    private let agent: any AgentRequesting
+
+    public init(agent: any AgentRequesting) {
+        self.agent = agent
+    }
+
+    public func request(
+        _ delivery: PostMountActionDelivery,
+        cancellation: MountOperationCancellation
+    ) async throws -> AgentResponse {
+        try await agent.request(.executePostMountActions(delivery), cancellation: cancellation)
+    }
+}
+
 public enum AgentRequestDeadline {
     public enum Category: String, Sendable, Equatable {
         case probe

@@ -41,6 +41,7 @@ actor DaemonController {
     let mounts: SystemMountOperator
     let mountExecutor: GuardedMountExecutor
     let agent: any AgentRequesting
+    let postMountActionRequester: PostMountActionRequester
     let agentIsOnline: @Sendable () -> Bool
     let dependencies: TypedDependencyOperator
     let permissionGate: PermissionGate
@@ -83,6 +84,7 @@ actor DaemonController {
         mounts = mountOperator
         mountExecutor = GuardedMountExecutor(mounts: mountOperator)
         self.agent = agent
+        postMountActionRequester = PostMountActionRequester(agent: agent)
         self.agentIsOnline = agentIsOnline
         self.dependencies = dependencies
         let permission = PermissionGate()
@@ -498,7 +500,12 @@ actor DaemonController {
                     expectedSource: definition.source
                 ) {
                 case .alreadyMounted:
-                    await didMount(definition, previousSource: currentSource, token: token)
+                    await didMount(
+                        definition,
+                        previousSource: currentSource,
+                        token: token,
+                        operationCancellation: operationCancellation
+                    )
                     guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .accepted
                 case .sourceConflict:
@@ -525,7 +532,12 @@ actor DaemonController {
                 try ConfigurationValidator().validate(configuration, liveMounts: live)
                 try await mountExecutor.mount(definition, cancellation: cancellation)
                 guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
-                await didMount(definition, previousSource: currentSource, token: token)
+                await didMount(
+                    definition,
+                    previousSource: currentSource,
+                    token: token,
+                    operationCancellation: operationCancellation
+                )
                 guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
             case .unmount:
                 guard confirmed else { return .failure(.mountConflict, "Unmounting requires explicit confirmation.") }
@@ -636,12 +648,16 @@ actor DaemonController {
             case .reveal:
                 let token = mountWork.beginManual(for: definition.id)
                 activeToken = token
+                let cancellation = mountCancellation(for: token, operationCancellation: operationCancellation)
                 guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 guard try await mounts.currentSource(at: definition.mountPoint) == definition.source else {
                     return .failure(.sourceMismatch, "The configured source is not mounted at this location.")
                 }
                 guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
-                let response = try await agent.request(.revealManagedMount(mountPoint: definition.mountPoint))
+                let response = try await agent.request(
+                    .revealManagedMount(mountPoint: definition.mountPoint),
+                    cancellation: cancellation
+                )
                 guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 guard response == .succeeded else {
                     if case .failed(let detail) = response { return .failure(.verificationFailed, detail) }

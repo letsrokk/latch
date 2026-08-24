@@ -90,6 +90,15 @@ struct OperationLifecycleTests {
         #expect(pruned == [oldestTerminal.id])
     }
 
+    @Test func retentionMayExceedTheHistoryLimitRatherThanPruneActiveOperations() {
+        let active = (0..<3).map { index in
+            snapshot(state: .running, updatedAt: Date(timeIntervalSince1970: Double(index)))
+        }
+        let terminal = snapshot(state: .failed, updatedAt: Date(timeIntervalSince1970: 4))
+
+        #expect(OperationLifecycle.pruningIDs(from: active + [terminal], limit: 1) == [terminal.id])
+    }
+
     @Test func monitoringContinuesForEveryNonterminalState() {
         #expect(OperationMonitoringPolicy.shouldMonitor(.accepted))
         #expect(OperationMonitoringPolicy.shouldMonitor(.running))

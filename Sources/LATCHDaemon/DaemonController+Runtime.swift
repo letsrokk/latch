@@ -70,9 +70,15 @@ extension DaemonController {
         _ definition: MountDefinition,
         previousSource: String?,
         token: MountWorkToken? = nil,
-        automatic: Bool = false
+        automatic: Bool = false,
+        operationCancellation: OperationCancellationToken? = nil
     ) async {
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return }
+        guard await mountWorkIsCurrent(
+            token,
+            definition: definition,
+            automatic: automatic,
+            operationCancellation: operationCancellation
+        ) else { return }
         let date = Date()
         mountedAt[definition.id] = date
         lastChecks[definition.id] = nil
@@ -84,11 +90,17 @@ extension DaemonController {
             detail: "Mounted. Waiting for the first health check.",
             at: date
         ))
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return }
+        guard await mountWorkIsCurrent(
+            token,
+            definition: definition,
+            automatic: automatic,
+            operationCancellation: operationCancellation
+        ) else { return }
         await executePostMountActions(
             definition,
             token: token,
             automatic: automatic,
+            operationCancellation: operationCancellation,
             createIfNeeded: PostMountDispatchPolicy.shouldDispatch(
                 previousSource: previousSource,
                 verifiedSource: definition.source
@@ -100,11 +112,22 @@ extension DaemonController {
         _ definition: MountDefinition,
         token: MountWorkToken?,
         automatic: Bool,
+        operationCancellation: OperationCancellationToken? = nil,
         createIfNeeded: Bool
     ) async {
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return }
+        guard await mountWorkIsCurrent(
+            token,
+            definition: definition,
+            automatic: automatic,
+            operationCancellation: operationCancellation
+        ) else { return }
         guard await stateStore.postMountActionSource(for: definition.id) != definition.source else { return }
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return }
+        guard await mountWorkIsCurrent(
+            token,
+            definition: definition,
+            automatic: automatic,
+            operationCancellation: operationCancellation
+        ) else { return }
 
         let delivery: PostMountActionDelivery
         do {
@@ -126,17 +149,30 @@ extension DaemonController {
             await recordPostMountActionFailure(definition, detail: "Post-mount actions were not persisted: \(error.localizedDescription)")
             return
         }
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return }
+        guard await mountWorkIsCurrent(
+            token,
+            definition: definition,
+            automatic: automatic,
+            operationCancellation: operationCancellation
+        ) else { return }
 
         let response: AgentResponse
         do {
-            response = try await agent.request(.executePostMountActions(delivery))
+            let cancellation = token.map {
+                mountCancellation(for: $0, operationCancellation: operationCancellation)
+            } ?? MountOperationCancellation(isCancelled: { operationCancellation?.isCancelled == true })
+            response = try await postMountActionRequester.request(delivery, cancellation: cancellation)
         } catch {
             // Keep the delivery pending. The next healthy check retries it after
             // the login agent reconnects, without reporting a mount failure.
             return
         }
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return }
+        guard await mountWorkIsCurrent(
+            token,
+            definition: definition,
+            automatic: automatic,
+            operationCancellation: operationCancellation
+        ) else { return }
         guard case .postMountActionsAcknowledged(let acknowledgement) = response,
               acknowledgement.deliveryID == delivery.id else {
             await recordPostMountActionFailure(definition, detail: "Post-mount actions returned an invalid acknowledgement.")
@@ -148,7 +184,12 @@ extension DaemonController {
             await recordPostMountActionFailure(definition, detail: "Post-mount actions could not be acknowledged: \(error.localizedDescription)")
             return
         }
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return }
+        guard await mountWorkIsCurrent(
+            token,
+            definition: definition,
+            automatic: automatic,
+            operationCancellation: operationCancellation
+        ) else { return }
         for failure in acknowledgement.failures {
             await recordPostMountActionFailure(definition, detail: "Post-mount action failed: \(failure)")
         }
@@ -157,8 +198,10 @@ extension DaemonController {
     func mountWorkIsCurrent(
         _ token: MountWorkToken?,
         definition: MountDefinition,
-        automatic: Bool
+        automatic: Bool,
+        operationCancellation: OperationCancellationToken? = nil
     ) async -> Bool {
+        if !automatic, operationCancellation?.observeCancellation() == true { return false }
         guard let token else { return true }
         if automatic { return await automaticWorkIsCurrent(token, definition: definition) }
         return manualWorkIsCurrent(token, definition: definition)

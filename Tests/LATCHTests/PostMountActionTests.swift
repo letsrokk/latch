@@ -122,6 +122,28 @@ struct PostMountActionTests {
         #expect(await completed.postMountActionSource(for: mountID) == "nas.local:/media")
     }
 
+    @Test func cancellationAfterMountVerificationPreventsPostMountDispatch() async {
+        let cancellation = PostMountCancellationState()
+        let recorder = PostMountRequestRecorder()
+        let requester = PostMountActionRequester(agent: recorder)
+        let delivery = PostMountActionDelivery(
+            mountID: UUID(),
+            source: "nas.local:/media",
+            mountPoint: "/Volumes/Media/Library",
+            actions: [.revealInFinder]
+        )
+
+        #expect(await cancellation.verifyMountAndCancelOperation())
+        await #expect(throws: MountOperationCancellationError.cancelled) {
+            _ = try await requester.request(
+                delivery,
+                cancellation: .init(isCancelled: { cancellation.isCancelled })
+            )
+        }
+
+        #expect(await recorder.lastRequest == nil)
+    }
+
     @Test func agentLedgerDeduplicatesACompletedDeliveryAfterAcknowledgementLoss() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -183,4 +205,25 @@ struct PostMountActionTests {
 private actor ActionEffectRecorder {
     var identifiers: [UUID] = []
     func record(_ identifier: UUID) { identifiers.append(identifier) }
+}
+
+private final class PostMountCancellationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+
+    func verifyMountAndCancelOperation() async -> Bool {
+        lock.withLock { cancelled = true }
+        return true
+    }
+}
+
+private actor PostMountRequestRecorder: AgentRequesting {
+    private(set) var lastRequest: AgentRequest?
+
+    func request(_ request: AgentRequest) async throws -> AgentResponse {
+        lastRequest = request
+        return .succeeded
+    }
 }

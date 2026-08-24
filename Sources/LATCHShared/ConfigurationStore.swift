@@ -6,6 +6,10 @@ public protocol RecoveryStateWriting: Sendable {
     func write(_ data: Data, to url: URL) throws
 }
 
+public protocol RecoveryStateQuarantining: Sendable {
+    func quarantine(_ stateURL: URL) throws -> URL
+}
+
 public enum RuntimePersistencePolicy {
     public static func requiresImmediateWrite(previous: MountStatus?, next: MountStatus) -> Bool {
         previous?.state != next.state || previous?.errorCode != next.errorCode
@@ -20,6 +24,30 @@ struct AtomicRecoveryStateWriter: RecoveryStateWriting {
         _ = chmod(directory.path, mode_t(0o700))
         try data.write(to: url, options: [.atomic])
         guard chmod(url.path, mode_t(0o600)) == 0 else { throw POSIXError(.EACCES) }
+    }
+}
+
+struct FileRecoveryStateQuarantiner: RecoveryStateQuarantining {
+    private let setPermissions: @Sendable (URL) throws -> Void
+
+    init() {
+        setPermissions = { url in
+            guard chmod(url.path, mode_t(0o600)) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EACCES)
+            }
+        }
+    }
+
+    init(setPermissions: @escaping @Sendable (URL) throws -> Void) {
+        self.setPermissions = setPermissions
+    }
+
+    func quarantine(_ stateURL: URL) throws -> URL {
+        let quarantineURL = stateURL.deletingLastPathComponent()
+            .appendingPathComponent("state.corrupt-\(UUID().uuidString).json")
+        try FileManager.default.moveItem(at: stateURL, to: quarantineURL)
+        try setPermissions(quarantineURL)
+        return quarantineURL
     }
 }
 
@@ -255,15 +283,22 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
     private var runtimeSnapshotGeneration: UInt64 = 0
 
     public init() {
-        self.init(directory: LATCHIdentity.applicationSupportDirectory, writer: nil)
+        self.init(directory: LATCHIdentity.applicationSupportDirectory, writer: nil, quarantiner: nil)
     }
 
-    public init(directory: URL, writer: RecoveryStateWriting? = nil) {
+    public init(
+        directory: URL,
+        writer: RecoveryStateWriting? = nil,
+        quarantiner: RecoveryStateQuarantining? = nil
+    ) {
         self.directory = directory
         let stateURL = directory.appendingPathComponent("state.json")
         self.stateURL = stateURL
         self.writer = writer ?? AtomicRecoveryStateWriter()
-        let loaded = Self.loadState(at: stateURL)
+        let loaded = Self.loadState(
+            at: stateURL,
+            quarantiner: quarantiner ?? FileRecoveryStateQuarantiner()
+        )
         state = loaded.state
         persistenceHealthState = loaded.health
     }
@@ -456,7 +491,10 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
         try persist(state)
     }
 
-    private static func loadState(at url: URL) -> (state: State, health: PersistenceHealthSnapshot) {
+    private static func loadState(
+        at url: URL,
+        quarantiner: any RecoveryStateQuarantining
+    ) -> (state: State, health: PersistenceHealthSnapshot) {
         let manager = FileManager.default
         guard manager.fileExists(atPath: url.path) else { return (State(), .healthy) }
 
@@ -464,11 +502,8 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
             return (try JSONDecoder().decode(State.self, from: Data(contentsOf: url)), .healthy)
         } catch {
             let nsError = error as NSError
-            let quarantineURL = url.deletingLastPathComponent()
-                .appendingPathComponent("state.corrupt-\(UUID().uuidString).json")
             do {
-                try manager.moveItem(at: url, to: quarantineURL)
-                _ = chmod(quarantineURL.path, mode_t(0o600))
+                let quarantineURL = try quarantiner.quarantine(url)
                 persistenceLogger.error("Quarantined corrupt recovery state at \(quarantineURL.path, privacy: .private(mask: .hash))")
             } catch {
                 persistenceLogger.error("Could not quarantine corrupt recovery state: \(error.localizedDescription, privacy: .private)")

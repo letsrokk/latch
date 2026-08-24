@@ -163,6 +163,71 @@ struct ProbeAndPersistenceTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
     }
 
+    @Test func incompatibleRecoveryStateShapeIsQuarantined() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(#"{"pausedMounts":"not-an-array"}"#.utf8)
+            .write(to: root.appendingPathComponent("state.json"))
+
+        let store = RecoveryStateStore(directory: root)
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.path)
+
+        #expect(await store.persistenceHealthSnapshot().isDegraded)
+        #expect(files.contains { $0.hasPrefix("state.corrupt-") && $0.hasSuffix(".json") })
+    }
+
+    @Test func failedRecoveryStateQuarantineLeavesTheOriginalForDiagnosis() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let stateURL = root.appendingPathComponent("state.json")
+        try Data("corrupt-state".utf8).write(to: stateURL)
+
+        let store = RecoveryStateStore(
+            directory: root,
+            quarantiner: FailingRecoveryStateQuarantiner()
+        )
+
+        #expect(await store.persistenceHealthSnapshot().isDegraded)
+        #expect(FileManager.default.fileExists(atPath: stateURL.path))
+    }
+
+    @Test func quarantinePermissionFailureIsReportedAfterPreservingTheCorruptFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let stateURL = root.appendingPathComponent("state.json")
+        try Data("corrupt-state".utf8).write(to: stateURL)
+        let quarantiner = FileRecoveryStateQuarantiner(
+            setPermissions: { _ in throw POSIXError(.EACCES) }
+        )
+
+        let store = RecoveryStateStore(directory: root, quarantiner: quarantiner)
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.path)
+
+        #expect(await store.persistenceHealthSnapshot().isDegraded)
+        #expect(!FileManager.default.fileExists(atPath: stateURL.path))
+        #expect(files.contains { $0.hasPrefix("state.corrupt-") && $0.hasSuffix(".json") })
+    }
+
+    @Test func successfulWriteRecoversHealthAfterCorruptStateWasQuarantined() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("corrupt-state".utf8).write(to: root.appendingPathComponent("state.json"))
+        let store = RecoveryStateStore(directory: root)
+        #expect(await store.persistenceHealthSnapshot().isDegraded)
+        let mountID = UUID()
+
+        try await store.setPaused(true, for: mountID)
+
+        let health = await store.persistenceHealthSnapshot()
+        #expect(!health.isDegraded)
+        #expect(health.lastSuccessfulWriteAt != nil)
+        #expect(await RecoveryStateStore(directory: root).isPaused(mountID))
+    }
+
     @Test func latchStoresPersistConfigurationAndRecoveryStateWithoutLegacyDirectory() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -502,6 +567,12 @@ struct ProbeAndPersistenceTests {
 
 private struct FailingRecoveryStateWriter: RecoveryStateWriting {
     func write(_ data: Data, to url: URL) throws {
+        throw POSIXError(.EACCES)
+    }
+}
+
+private struct FailingRecoveryStateQuarantiner: RecoveryStateQuarantining {
+    func quarantine(_ stateURL: URL) throws -> URL {
         throw POSIXError(.EACCES)
     }
 }

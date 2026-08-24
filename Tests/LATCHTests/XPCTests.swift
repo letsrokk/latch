@@ -108,6 +108,30 @@ struct XPCTests {
         #expect(invalidated.value)
     }
 
+    @Test func cancelledAgentSideEffectIsNotDispatched() async {
+        let requester = RecordingAgentRequester(response: .succeeded)
+        let cancellation = MountOperationCancellation(isCancelled: { true })
+
+        await #expect(throws: MountOperationCancellationError.cancelled) {
+            _ = try await requester.request(
+                .revealManagedMount(mountPoint: "/tmp/share"),
+                cancellation: cancellation
+            )
+        }
+
+        #expect(await requester.lastRequest == nil)
+    }
+
+    @Test func currentAgentSideEffectDelegatesToTheUnderlyingRequester() async throws {
+        let request = AgentRequest.revealManagedMount(mountPoint: "/tmp/share")
+        let requester = RecordingAgentRequester(response: .succeeded)
+
+        let response = try await requester.request(request, cancellation: .never)
+
+        #expect(response == .succeeded)
+        #expect(await requester.lastRequest == request)
+    }
+
     @Test func firstAgentRegistrationRequestsAnImmediateHealthCheck() {
         var availability = AgentConnectionAvailability()
 
