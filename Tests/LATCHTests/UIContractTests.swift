@@ -4,6 +4,13 @@ import Testing
 
 @Suite("Option presentation contract")
 struct UIContractTests {
+    @Test func runtimeSnapshotsApplyOnlyWhenTheirRevisionAdvances() {
+        #expect(RuntimeSnapshotApplicationPolicy.shouldApply(candidateRevision: 1, after: nil))
+        #expect(RuntimeSnapshotApplicationPolicy.shouldApply(candidateRevision: 9, after: 8))
+        #expect(!RuntimeSnapshotApplicationPolicy.shouldApply(candidateRevision: 9, after: 9))
+        #expect(!RuntimeSnapshotApplicationPolicy.shouldApply(candidateRevision: 8, after: 9))
+    }
+
     @Test func menuFooterRoutesMountsAndSettingsToTheMainWindowWithoutADuplicatePreferencesScene() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -19,6 +26,24 @@ struct UIContractTests {
         #expect(LATCHMenuFooterAction.allCases.map(\.title) == ["Overview", "Mounts", "Settings"])
         #expect(LATCHMenuFooterAction.allCases.map(\.destination) == [.overview, .managed, .settings])
         #expect(menuSource.contains("ForEach(LATCHMenuFooterAction.allCases)"))
+    }
+
+    @Test func mainWindowUsesSceneRestorationAndKeepsRowActionsAsSeparateAccessibilityElements() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSource = try String(contentsOf: root.appending(path: "Sources/LATCHApp/LATCHApp.swift"), encoding: .utf8)
+        let mainSource = try String(contentsOf: root.appending(path: "Sources/LATCHApp/SettingsViews.swift"), encoding: .utf8)
+        let mountSource = try String(contentsOf: root.appending(path: "Sources/LATCHApp/MountViews.swift"), encoding: .utf8)
+        let monitoringSource = try String(contentsOf: root.appending(path: "Sources/LATCHApp/SettingsViews+Monitoring.swift"), encoding: .utf8)
+
+        #expect(appSource.contains("MainWindowView()"))
+        #expect(mainSource.contains("struct MainWindowView: View"))
+        #expect(mainSource.contains("@SceneStorage(\"mainDestination\")"))
+        #expect(mainSource.contains("MainSidebarView("))
+        #expect(mountSource.contains(".accessibilityHint(\"Opens mount actions\")"))
+        #expect(monitoringSource.contains(".accessibilityHint(\"Changes monitoring service setup\")"))
     }
 
     @Test func monitoringSetupAndSupportCopyUsesFinalLabels() {
@@ -38,6 +63,23 @@ struct UIContractTests {
         #expect(LATCHMainDestination.overview.title == "Overview")
         #expect(LATCHMainDestination.settings.title == "Settings")
         #expect(LATCHMainDestination.overview != LATCHMainDestination.settings)
+    }
+
+    @Test func explicitMainWindowNavigationTakesPriorityOverSceneRestoration() {
+        #expect(
+            MainWindowDestinationRestorationPolicy.destination(
+                stored: .settings,
+                current: .overview,
+                hasExplicitRequest: true
+            ) == .overview
+        )
+        #expect(
+            MainWindowDestinationRestorationPolicy.destination(
+                stored: .settings,
+                current: .overview,
+                hasExplicitRequest: false
+            ) == .settings
+        )
     }
 
     @Test func menuMountPresentationShowsLocationAndSourceBesideNameAndStatus() {

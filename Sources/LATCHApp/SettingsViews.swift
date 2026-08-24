@@ -3,8 +3,9 @@ import Darwin
 import LATCHShared
 import SwiftUI
 
-struct SettingsView: View {
+struct MainWindowView: View {
     @EnvironmentObject private var model: AppModel
+    @SceneStorage("mainDestination") private var storedDestination = LATCHMainDestination.overview.rawValue
     @State private var draft: MountDraft?
     @State private var serverDraft: NFSServerProfile?
     @State private var templateServer: NFSServerProfile?
@@ -21,7 +22,10 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            sidebar
+            MainSidebarView(
+                selection: destinationSelection,
+                daemonOnline: model.serviceStatus.daemonOnline
+            )
                 .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 200)
         } detail: {
             detail
@@ -30,6 +34,12 @@ struct SettingsView: View {
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)
         .textFieldStyle(.roundedBorder)
+        .onAppear {
+            model.restoreMainWindowDestination(from: storedDestination)
+        }
+        .onChange(of: model.mainDestination) { _, destination in
+            storedDestination = destination.rawValue
+        }
         .sheet(item: $draft) { value in
             MountEditorView(draft: value, servers: model.configuration.servers, initialServer: templateServer) { saved, server in
                 await model.save(saved, creating: server)
@@ -76,33 +86,14 @@ struct SettingsView: View {
         } message: { Text("This permanently removes the saved health and recovery event history.") }
     }
 
-    private var sidebar: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 9) {
-                    Text("LATCH").font(.headline)
-                }
-                HStack(spacing: 6) {
-                    Circle().fill(model.serviceStatus.daemonOnline ? Color.green : Color.red).frame(width: 8, height: 8)
-                    Text(model.serviceStatus.daemonOnline ? "Daemon online" : "Daemon offline")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+    private var destinationSelection: Binding<LATCHMainDestination> {
+        Binding(
+            get: { model.mainDestination },
+            set: { destination in
+                storedDestination = destination.rawValue
+                model.mainDestination = destination
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 15)
-
-            List(selection: $model.mainDestination) {
-                ForEach(LATCHMainDestination.allCases.filter { $0 != .settings }) { destination in
-                    Label(destination.title, systemImage: destination.symbol).tag(destination)
-                }
-                Section {
-                    Label(LATCHMainDestination.settings.title, systemImage: LATCHMainDestination.settings.symbol)
-                        .tag(LATCHMainDestination.settings)
-                }
-            }
-            .listStyle(.sidebar)
-        }
+        )
     }
 
     @ViewBuilder

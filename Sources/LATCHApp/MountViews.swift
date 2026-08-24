@@ -97,7 +97,7 @@ struct LATCHMenu: View {
     }
 
     private func openMainWindow(destination: LATCHMainDestination) {
-        model.mainDestination = destination
+        model.requestMainWindow(destination: destination)
         dismiss()
         openWindow(id: "latch-main")
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -175,6 +175,8 @@ private struct MountMenuRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(presentation.name), \(presentation.status), mounted at \(presentation.mountPoint), source \(presentation.source)")
             Menu {
                 if let operation {
                     Button("Cancel Operation") { cancel(operation.id) }
@@ -196,9 +198,9 @@ private struct MountMenuRow: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .accessibilityLabel("Actions for \(definition.displayName)")
+                .accessibilityHint("Opens mount actions")
         }
         .padding(.vertical, 9)
-        .accessibilityElement(children: .combine)
     }
 }
 

@@ -390,7 +390,7 @@ public enum LATCHErrorCode: String, Codable, Sendable {
     case none, daemonOffline, unauthorized, networkUnavailable, probeTimeout
     case permissionDenied, tccDenied, staleHandle, sourceMismatch, mountConflict
     case dependencyUnavailable, dependencyStopFailed, unmountFailed, remountFailed
-    case verificationFailed, malformedRequest, oversizedRequest, unsupportedVersion
+    case verificationFailed, persistenceFailed, malformedRequest, oversizedRequest, unsupportedVersion
 }
 
 public struct MountStatus: Codable, Sendable, Equatable, Identifiable {

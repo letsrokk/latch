@@ -258,6 +258,35 @@ struct ProbeAndPersistenceTests {
         #expect(await RecoveryStateStore(directory: root).automaticRetryState(for: id) == original)
     }
 
+    @Test func unchangedAutomaticRetryStateDoesNotRewriteTheStateFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writer = CountingRecoveryStateWriter()
+        let store = RecoveryStateStore(directory: root, writer: writer)
+        let retry = AutomaticRetryState(kind: .missingMount, failures: 1, nextAttempt: .distantFuture)
+        let mountID = UUID()
+
+        try await store.setAutomaticRetryState(retry, for: mountID)
+        try await store.setAutomaticRetryState(retry, for: mountID)
+
+        #expect(writer.count == 1)
+    }
+
+    @Test func onlyStatusTransitionsRequireImmediateRuntimePersistence() {
+        let id = UUID()
+        let date = Date()
+        let healthy = MountStatus(definitionID: id, observedSource: "nas:/share", observedMountPoint: "/tmp/share", state: .healthy, lastProbe: date, lastStateChange: date, lastHealthyTime: date, lastRecoveryTime: nil, detail: "Healthy", errorCode: .none)
+        var refreshed = healthy
+        refreshed.lastProbe = date.addingTimeInterval(1)
+        var failed = refreshed
+        failed.state = .probeError
+        failed.errorCode = .verificationFailed
+
+        #expect(RuntimePersistencePolicy.requiresImmediateWrite(previous: nil, next: healthy))
+        #expect(RuntimePersistencePolicy.requiresImmediateWrite(previous: healthy, next: refreshed) == false)
+        #expect(RuntimePersistencePolicy.requiresImmediateWrite(previous: refreshed, next: failed))
+    }
+
     @Test func monitoringStateCommitsPauseAndRetryAtomically() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -448,5 +477,16 @@ struct ProbeAndPersistenceTests {
 private struct FailingRecoveryStateWriter: RecoveryStateWriting {
     func write(_ data: Data, to url: URL) throws {
         throw POSIXError(.EACCES)
+    }
+}
+
+private final class CountingRecoveryStateWriter: RecoveryStateWriting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var count: Int { lock.withLock { storage } }
+
+    func write(_ data: Data, to url: URL) throws {
+        lock.withLock { storage += 1 }
     }
 }

@@ -252,15 +252,17 @@ struct ManagedServicesSetupRow: View {
                 Text("The privileged daemon manages mounts; the login agent performs work in your user session.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Monitoring services, \(presentation.statusText)")
             Spacer()
             Text(presentation.statusText)
                 .font(.subheadline)
                 .foregroundStyle(color)
+                .accessibilityHidden(true)
             Button(actionTitle, action: action)
+                .accessibilityHint("Changes monitoring service setup")
         }
         .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Monitoring services, \(presentation.statusText)")
     }
 
     private var action: () -> Void {

@@ -1,6 +1,42 @@
 import SwiftUI
 import LATCHShared
 
+struct MainSidebarView: View {
+    @Binding var selection: LATCHMainDestination
+    let daemonOnline: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("LATCH").font(.headline)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(daemonOnline ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                    Text(daemonOnline ? "Daemon online" : "Daemon offline")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 15)
+
+            List(selection: $selection) {
+                ForEach(LATCHMainDestination.allCases.filter { $0 != .settings }) { destination in
+                    Label(destination.title, systemImage: destination.symbol).tag(destination)
+                }
+                Section {
+                    Label(LATCHMainDestination.settings.title, systemImage: LATCHMainDestination.settings.symbol)
+                        .tag(LATCHMainDestination.settings)
+                }
+            }
+            .listStyle(.sidebar)
+        }
+    }
+}
+
 struct FieldHint: View {
     let text: String
     init(_ text: String) { self.text = text }

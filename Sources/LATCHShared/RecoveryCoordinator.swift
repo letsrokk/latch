@@ -1,6 +1,53 @@
 import Darwin
 import Foundation
 
+public enum BoundedAsyncWork {
+    public static func run<Element: Sendable>(
+        _ elements: [Element],
+        limit: Int,
+        operation: @escaping @Sendable (Element) async -> Void
+    ) async {
+        guard !elements.isEmpty else { return }
+        let concurrency = max(1, min(limit, elements.count))
+        await withTaskGroup(of: Void.self) { group in
+            var nextIndex = 0
+            for _ in 0..<concurrency {
+                let element = elements[nextIndex]
+                nextIndex += 1
+                group.addTask { await operation(element) }
+            }
+            while await group.next() != nil {
+                guard nextIndex < elements.count else { continue }
+                let element = elements[nextIndex]
+                nextIndex += 1
+                group.addTask { await operation(element) }
+            }
+        }
+    }
+}
+
+public actor SweepValueCache<Value: Sendable> {
+    private var values: [String: Task<Value, Never>] = [:]
+
+    public init() {}
+
+    public func value(
+        for key: String,
+        load: @escaping @Sendable () async -> Value
+    ) async -> Value {
+        if let existing = values[key] {
+            return await existing.value
+        }
+        let task = Task { await load() }
+        values[key] = task
+        return await task.value
+    }
+
+    public func invalidate(_ key: String) {
+        values[key] = nil
+    }
+}
+
 public enum RecoveryTrigger: Sendable, Equatable {
     case automatic(ProbeResult)
     case manual

@@ -5,6 +5,60 @@ import Testing
 
 @Suite("Guarded recovery")
 struct RecoveryCoordinatorTests {
+    @Test func automaticWorkRunsWithBoundedConcurrency() async {
+        let tracker = ConcurrentWorkTracker()
+
+        await BoundedAsyncWork.run(Array(0..<6), limit: 2) { _ in
+            await tracker.begin()
+            try? await Task.sleep(for: .milliseconds(20))
+            await tracker.end()
+        }
+
+        #expect(await tracker.completed == 6)
+        #expect(await tracker.peak == 2)
+    }
+
+    @Test func sweepCacheSharesOneInFlightReachabilityCheckPerHost() async {
+        let cache = SweepValueCache<Bool>()
+        let loads = AsyncCounter()
+        let loadGate = TestOperationGate()
+
+        async let first = cache.value(for: "nas.local") {
+            await loads.increment()
+            await loadGate.enterAndWait()
+            return true
+        }
+        await loadGate.waitUntilEntered()
+        async let second = cache.value(for: "nas.local") {
+            await loads.increment()
+            return false
+        }
+        await loadGate.release()
+
+        #expect(await first)
+        #expect(await second)
+        #expect(await loads.value == 1)
+    }
+
+    @Test func sweepCacheCanRefreshAHostAfterWakeOnLANChangesReachability() async {
+        let cache = SweepValueCache<Bool>()
+        let loads = AsyncCounter()
+
+        let beforeWake = await cache.value(for: "nas.local") {
+            await loads.increment()
+            return false
+        }
+        await cache.invalidate("nas.local")
+        let afterWake = await cache.value(for: "nas.local") {
+            await loads.increment()
+            return true
+        }
+
+        #expect(beforeWake == false)
+        #expect(afterWake)
+        #expect(await loads.value == 2)
+    }
+
     @Test(arguments: [
         ProbeResult(),
         ProbeResult(networkUnavailable: true),
@@ -767,5 +821,29 @@ private actor FakeCooldownStore: RecoveryCooldownStoring {
         if failRecord { throw FakeFailure.expected }
         values[mountID] = date
         try cancellation.throwIfCancelled()
+    }
+}
+
+private actor ConcurrentWorkTracker {
+    private var active = 0
+    private(set) var peak = 0
+    private(set) var completed = 0
+
+    func begin() {
+        active += 1
+        peak = max(peak, active)
+    }
+
+    func end() {
+        active -= 1
+        completed += 1
+    }
+}
+
+private actor AsyncCounter {
+    private(set) var value = 0
+
+    func increment() {
+        value += 1
     }
 }

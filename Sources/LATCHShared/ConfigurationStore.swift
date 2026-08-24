@@ -6,6 +6,12 @@ public protocol RecoveryStateWriting: Sendable {
     func write(_ data: Data, to url: URL) throws
 }
 
+public enum RuntimePersistencePolicy {
+    public static func requiresImmediateWrite(previous: MountStatus?, next: MountStatus) -> Bool {
+        previous?.state != next.state || previous?.errorCode != next.errorCode
+    }
+}
+
 struct AtomicRecoveryStateWriter: RecoveryStateWriting {
     func write(_ data: Data, to url: URL) throws {
         let directory = url.deletingLastPathComponent()
@@ -318,6 +324,7 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
     public func automaticRetryState(for mountID: UUID) -> AutomaticRetryState? { state.automaticRetries[mountID] }
 
     public func setAutomaticRetryState(_ retry: AutomaticRetryState?, for mountID: UUID) throws {
+        guard state.automaticRetries[mountID] != retry else { return }
         try mutateState { $0.automaticRetries[mountID] = retry }
     }
 
@@ -355,6 +362,7 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
         ifCurrent: @Sendable () -> Bool
     ) throws -> Bool {
         guard ifCurrent() else { return false }
+        guard state.automaticRetries[mountID] != retry else { return ifCurrent() }
         var candidate = state
         candidate.automaticRetries[mountID] = retry
         try persist(candidate)

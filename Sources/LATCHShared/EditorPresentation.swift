@@ -33,6 +33,16 @@ public enum LATCHMainDestination: String, CaseIterable, Identifiable, Hashable, 
     }
 }
 
+public enum MainWindowDestinationRestorationPolicy {
+    public static func destination(
+        stored: LATCHMainDestination?,
+        current: LATCHMainDestination,
+        hasExplicitRequest: Bool
+    ) -> LATCHMainDestination {
+        hasExplicitRequest ? current : stored ?? current
+    }
+}
+
 public enum LATCHMenuFooterAction: String, CaseIterable, Identifiable, Sendable {
     case overview
     case mounts

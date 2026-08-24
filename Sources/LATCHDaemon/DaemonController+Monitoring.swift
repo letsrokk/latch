@@ -1,9 +1,17 @@
 import Foundation
 import LATCHShared
 
+private struct AutomaticCheckJob: Sendable {
+    let definition: MountDefinition
+    let token: MountWorkToken
+    let date: Date
+    let forceRuleTransition: Bool
+}
+
 extension DaemonController {
     func runDueChecks(forceRuleTransition: Bool = false) async {
         let date = Date()
+        var jobs: [AutomaticCheckJob] = []
         for definition in configuration.mounts {
             guard let token = mountWork.beginAutomatic(for: definition.id) else { continue }
             guard let resolved = resolvedDefinition(definition) else {
@@ -30,9 +38,23 @@ extension DaemonController {
             }
             lastChecks[definition.id] = date
             mountedAt[definition.id] = nil
-            await checkAutomatically(resolved, token: token, at: date, forceRuleTransition: forceRuleTransition)
-            mountWork.finishAutomatic(token)
+            jobs.append(.init(definition: resolved, token: token, date: date, forceRuleTransition: forceRuleTransition))
         }
+        let reachability = SweepValueCache<Bool>()
+        await BoundedAsyncWork.run(jobs, limit: 2) { [weak self] job in
+            await self?.performAutomaticCheck(job, reachability: reachability)
+        }
+    }
+
+    private func performAutomaticCheck(_ job: AutomaticCheckJob, reachability: SweepValueCache<Bool>) async {
+        await checkAutomatically(
+            job.definition,
+            token: job.token,
+            at: job.date,
+            forceRuleTransition: job.forceRuleTransition,
+            reachability: reachability
+        )
+        mountWork.finishAutomatic(job.token)
     }
 
     func networkPathChanged() async {
@@ -51,7 +73,13 @@ extension DaemonController {
         await runDueChecks()
     }
 
-    func checkAutomatically(_ definition: MountDefinition, token: MountWorkToken, at date: Date, forceRuleTransition: Bool) async {
+    func checkAutomatically(
+        _ definition: MountDefinition,
+        token: MountWorkToken,
+        at date: Date,
+        forceRuleTransition: Bool,
+        reachability: SweepValueCache<Bool>? = nil
+    ) async {
         guard await automaticWorkIsCurrent(token, definition: definition) else { return }
         let evaluation = await ruleEvaluation(for: definition)
         guard await automaticWorkIsCurrent(token, definition: definition) else { return }
@@ -78,7 +106,18 @@ extension DaemonController {
             break
         }
         guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-        let networkAvailable = await mounts.networkAvailable(for: definition.host)
+        let mountOperator = mounts
+        let reachabilityStarted = DispatchTime.now().uptimeNanoseconds
+        let networkAvailable: Bool
+        if let reachability {
+            networkAvailable = await reachability.value(for: definition.host) {
+                await mountOperator.networkAvailable(for: definition.host)
+            }
+        } else {
+            networkAvailable = await mountOperator.networkAvailable(for: definition.host)
+        }
+        let reachabilityMilliseconds = (DispatchTime.now().uptimeNanoseconds - reachabilityStarted) / 1_000_000
+        stateLogger.debug("NFS reachability completed in \(reachabilityMilliseconds, privacy: .public) ms; available=\(networkAvailable, privacy: .public)")
         guard await automaticWorkIsCurrent(token, definition: definition) else { return }
         guard networkAvailable else {
             if let server = configuration.servers.first(where: { $0.id == definition.serverID }) {
@@ -98,7 +137,14 @@ extension DaemonController {
                 )
                 guard await automaticWorkIsCurrent(token, definition: definition) else { return }
                 if transition == .continueMonitoring {
-                    await checkAutomatically(definition, token: token, at: Date(), forceRuleTransition: false)
+                    await reachability?.invalidate(definition.host)
+                    await checkAutomatically(
+                        definition,
+                        token: token,
+                        at: Date(),
+                        forceRuleTransition: false,
+                        reachability: reachability
+                    )
                     return
                 } else if transition == .scheduleMissingMountRetry {
                     guard await automaticWorkIsCurrent(token, definition: definition) else { return }

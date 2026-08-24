@@ -329,7 +329,8 @@ extension DaemonController {
         let old = statuses[status.id]
         statuses[status.id] = status
         onStatusesChanged(Array(statuses.values))
-        if old?.state != status.state || old?.errorCode != status.errorCode {
+        let requiresImmediateWrite = RuntimePersistencePolicy.requiresImmediateWrite(previous: old, next: status)
+        if requiresImmediateWrite {
             stateLogger.notice("Mount \(status.id.uuidString, privacy: .public) changed to \(status.state.rawValue, privacy: .public): \(status.detail, privacy: .public)")
             appendEvent(.init(
                 id: UUID(),
@@ -340,7 +341,11 @@ extension DaemonController {
                 detail: status.detail
             ))
         }
-        await persistRuntime()
+        if requiresImmediateWrite {
+            await persistRuntime()
+        } else {
+            scheduleRuntimePersistence()
+        }
     }
 
     func appendEvent(_ event: LATCHEvent) {
@@ -350,11 +355,38 @@ extension DaemonController {
     }
 
     func persistRuntime() async {
+        cancelScheduledRuntimePersistence()
+        await writeRuntimeSnapshot()
+    }
+
+    func scheduleRuntimePersistence() {
+        runtimePersistenceTask?.cancel()
+        runtimePersistenceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            await self?.flushScheduledRuntimePersistence()
+        }
+    }
+
+    func cancelScheduledRuntimePersistence() {
+        runtimePersistenceTask?.cancel()
+        runtimePersistenceTask = nil
+    }
+
+    private func flushScheduledRuntimePersistence() async {
+        runtimePersistenceTask = nil
+        await writeRuntimeSnapshot()
+    }
+
+    private func writeRuntimeSnapshot() async {
         let statusSnapshot = statuses
         let eventSnapshot = events
-        await withPersistenceIgnoreError { [weak self] in
+        let started = DispatchTime.now().uptimeNanoseconds
+        let persisted = await withPersistenceIgnoreError { [weak self] in
             try await self?.stateStore.setRuntime(statuses: statusSnapshot, events: eventSnapshot)
         }
+        let milliseconds = (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+        persistenceLogger.debug("Runtime persistence completed in \(milliseconds, privacy: .public) ms; success=\(persisted, privacy: .public)")
     }
 
     @discardableResult

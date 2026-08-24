@@ -55,6 +55,7 @@ actor DaemonController {
     var events: [LATCHEvent] = []
     var networkVolumesVerification: NetworkVolumesVerificationState = .notChecked
     var monitoringTask: Task<Void, Never>?
+    var runtimePersistenceTask: Task<Void, Never>?
     var operationTasks: [UUID: Task<Void, Never>] = [:]
     var operationSnapshots: [UUID: OperationSnapshot] = [:]
     var operationCancellations: [UUID: OperationCancellationToken] = [:]
@@ -185,6 +186,7 @@ actor DaemonController {
                 return .accepted
             case .getRecentEvents(let limit): return .events(Array(events.suffix(max(0, min(limit, 500)))))
             case .clearEvents:
+                cancelScheduledRuntimePersistence()
                 let shouldClear = await withPersistenceIgnoreError { [weak self] in
                     try await self?.stateStore.clearEvents()
                 }
@@ -192,7 +194,7 @@ actor DaemonController {
                     events.removeAll()
                     onEventsChanged([])
                 }
-                return .accepted
+                return ActivityClearResponse.response(persisted: shouldClear)
             case .saveDefinition(let definition):
                 let isNew = !configuration.mounts.contains { $0.id == definition.id }
                 var updated = configuration.mounts.filter { $0.id != definition.id }

@@ -91,8 +91,13 @@ private final class XPCReplyBox: @unchecked Sendable {
 
 private final class StatusBroadcaster: @unchecked Sendable {
     private let lock = NSLock()
+    private let logger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "runtime-updates")
     private let policy: ClientSigningPolicy
     private var connections: [UUID: NSXPCConnection] = [:]
+    private var revision: UInt64 = 0
+    private var latestStatuses: [MountStatus] = []
+    private var latestEvents: [LATCHEvent] = []
+    private var hasRuntimeState = false
 
     init(policy: ClientSigningPolicy) { self.policy = policy }
 
@@ -103,25 +108,49 @@ private final class StatusBroadcaster: @unchecked Sendable {
         connection.setCodeSigningRequirement(policy.codeSigningRequirement)
         connection.invalidationHandler = { [weak self] in self?.remove(id) }
         connection.interruptionHandler = { [weak self] in self?.remove(id) }
-        lock.withLock { connections[id] = connection }
+        let initialSnapshot = lock.withLock { () -> LATCHRuntimeSnapshot? in
+            connections[id] = connection
+            guard hasRuntimeState else { return nil }
+            return runtimeSnapshot()
+        }
         connection.resume()
+        if let initialSnapshot { send(initialSnapshot, to: connection) }
     }
 
     func broadcast(_ statuses: [MountStatus]) {
-        guard let data = try? JSONEncoder().encode(statuses) else { return }
-        send(data)
+        let update = lock.withLock { () -> (LATCHRuntimeSnapshot, [NSXPCConnection]) in
+            latestStatuses = statuses
+            revision &+= 1
+            hasRuntimeState = true
+            return (runtimeSnapshot(), Array(connections.values))
+        }
+        send(update.0, to: update.1)
     }
 
     func broadcast(events: [LATCHEvent]) {
-        guard let data = try? LATCHStatusSinkCodec.encodeEvents(events) else { return }
-        send(data)
+        let update = lock.withLock { () -> (LATCHRuntimeSnapshot, [NSXPCConnection]) in
+            latestEvents = events
+            revision &+= 1
+            hasRuntimeState = true
+            return (runtimeSnapshot(), Array(connections.values))
+        }
+        send(update.0, to: update.1)
     }
 
-    private func send(_ data: Data) {
-        let snapshot = lock.withLock { Array(connections.values) }
-        for connection in snapshot {
+    private func runtimeSnapshot() -> LATCHRuntimeSnapshot {
+        LATCHRuntimeSnapshot(revision: revision, statuses: latestStatuses, events: latestEvents)
+    }
+
+    private func send(_ snapshot: LATCHRuntimeSnapshot, to connections: [NSXPCConnection]) {
+        guard let data = try? LATCHStatusSinkCodec.encodeRuntime(snapshot) else { return }
+        logger.debug("Publishing runtime revision \(snapshot.revision, privacy: .public) to \(connections.count, privacy: .public) subscribers")
+        for connection in connections {
             (connection.remoteObjectProxy as? LATCHStatusSink)?.receiveStatus(data)
         }
+    }
+
+    private func send(_ snapshot: LATCHRuntimeSnapshot, to connection: NSXPCConnection) {
+        send(snapshot, to: [connection])
     }
 
     private func remove(_ id: UUID) {
@@ -132,6 +161,7 @@ private final class StatusBroadcaster: @unchecked Sendable {
 
 private final class AgentEndpointRegistry: ApplicationCoordinatorRequesting, @unchecked Sendable {
     private let lock = NSLock()
+    private let logger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "agent-requests")
     private let policy: ClientSigningPolicy
     private var connection: NSXPCConnection?
     private var availability = AgentConnectionAvailability()
@@ -163,17 +193,34 @@ private final class AgentEndpointRegistry: ApplicationCoordinatorRequesting, @un
 
     func request(_ request: AgentRequest) async throws -> AgentResponse {
         guard let connection = lock.withLock({ connection }) else { throw SystemOperationError.unavailable }
-        return try await withCheckedThrowingContinuation { continuation in
-            guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in continuation.resume(throwing: error) }) as? LATCHAgentXPCProtocol else {
-                continuation.resume(throwing: SystemOperationError.unavailable)
-                return
-            }
-            do {
-                proxy.handle(try AgentCodec.encode(request)) { data in
-                    do { continuation.resume(returning: try JSONDecoder().decode(AgentResponse.self, from: data)) }
-                    catch { continuation.resume(throwing: error) }
+        let handle = AgentConnectionHandle(connection)
+        let category = AgentRequestDeadline.category(for: request)
+        let started = DispatchTime.now().uptimeNanoseconds
+        do {
+            let response = try await AgentRequestDeadline.wait(
+                for: request,
+                onTimeout: { [weak self] in
+                    handle.connection.invalidate()
+                    self?.clear(ifMatching: handle.connection)
                 }
-            } catch { continuation.resume(throwing: error) }
+            ) { completion in
+                guard let proxy = handle.connection.remoteObjectProxyWithErrorHandler({ error in completion(.failure(error)) }) as? LATCHAgentXPCProtocol else {
+                    completion(.failure(SystemOperationError.unavailable))
+                    return
+                }
+                do {
+                    proxy.handle(try AgentCodec.encode(request)) { data in
+                        completion(Result { try JSONDecoder().decode(AgentResponse.self, from: data) })
+                    }
+                } catch { completion(.failure(error)) }
+            }
+            let milliseconds = (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            logger.debug("Agent request \(category.rawValue, privacy: .public) completed in \(milliseconds, privacy: .public) ms")
+            return response
+        } catch {
+            let milliseconds = (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            logger.notice("Agent request \(category.rawValue, privacy: .public) failed after \(milliseconds, privacy: .public) ms")
+            throw error
         }
     }
 
@@ -184,6 +231,14 @@ private final class AgentEndpointRegistry: ApplicationCoordinatorRequesting, @un
                 availability.disconnect()
             }
         }
+    }
+}
+
+private final class AgentConnectionHandle: @unchecked Sendable {
+    let connection: NSXPCConnection
+
+    init(_ connection: NSXPCConnection) {
+        self.connection = connection
     }
 }
 

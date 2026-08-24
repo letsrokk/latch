@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import LATCHShared
+import OSLog
 import ServiceManagement
 import UserNotifications
 import UniformTypeIdentifiers
@@ -30,6 +31,10 @@ final class AppModel: ObservableObject {
     let agentService = SMAppService.agent(plistName: "\(LATCHIdentity.agentIdentifier).plist")
     let mainApplicationService = SMAppService.mainApp
     private var statusSubscription: StatusSubscription?
+    private let runtimeLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "runtime-updates")
+    private var lastRuntimeRevision: UInt64?
+    private var hasPendingMainDestination = false
+    private var isMainWindowVisible = false
     private var refreshTask: Task<Void, Never>?
     var operationMonitorTasks: [UUID: Task<Void, Never>] = [:]
     private var approvalRefreshTask: Task<Void, Never>?
@@ -145,10 +150,10 @@ final class AppModel: ObservableObject {
             hasLoadedServiceStatus = true
         }
         if case .configuration(let value) = try await send(.getConfiguration) { configuration = value }
-        if case .statuses(let value) = try await send(.getStatus) { statuses = value }
+        if case .statuses(let value) = try await send(.getStatus), lastRuntimeRevision == nil { statuses = value }
         if case .externalMounts(let value) = try await send(.getExternalMounts) { externalMounts = value }
         if case .discoveredServers(let value) = try await send(.getDiscoveredServers) { discoveredServers = value }
-        if case .events(let value) = try await send(.getRecentEvents(limit: 100)) { events = LATCHEvent.newestFirst(value) }
+        if case .events(let value) = try await send(.getRecentEvents(limit: 100)), lastRuntimeRevision == nil { events = LATCHEvent.newestFirst(value) }
         if case .operationSnapshots(let value) = try await send(.getOperations) { reconcileOperations(value) }
     }
 
@@ -188,13 +193,29 @@ final class AppModel: ObservableObject {
     }
 
     func mainWindowDidAppear() {
+        isMainWindowVisible = true
         guard serviceSetupInProgress || hasPendingServiceApproval else { return }
         startApprovalRefreshWindow()
     }
 
     func mainWindowDidClose() {
+        isMainWindowVisible = false
         serviceSetupInProgress = false
         stopApprovalRefreshWindow()
+    }
+
+    func requestMainWindow(destination: LATCHMainDestination) {
+        mainDestination = destination
+        hasPendingMainDestination = !isMainWindowVisible
+    }
+
+    func restoreMainWindowDestination(from storedRawValue: String) {
+        mainDestination = MainWindowDestinationRestorationPolicy.destination(
+            stored: LATCHMainDestination(rawValue: storedRawValue),
+            current: mainDestination,
+            hasExplicitRequest: hasPendingMainDestination
+        )
+        hasPendingMainDestination = false
     }
 
     func applicationDidBecomeActive() async {
@@ -321,6 +342,7 @@ final class AppModel: ObservableObject {
             serviceStatus.daemonOnline = false
             statusSubscription?.cancel()
             statusSubscription = nil
+            lastRuntimeRevision = nil
         }
     }
 
@@ -333,6 +355,7 @@ final class AppModel: ObservableObject {
         stopApprovalRefreshWindow()
         statusSubscription?.cancel()
         statusSubscription = nil
+        lastRuntimeRevision = nil
     }
 
     func send(_ request: LATCHRequest) async throws -> LATCHResponse {
@@ -349,9 +372,13 @@ final class AppModel: ObservableObject {
         let subscription = StatusSubscription(policy: .init(teamID: teamID, bundleIdentifiers: [LATCHIdentity.daemonIdentifier])) { [weak self] update in
             switch update {
             case .statuses(let statuses):
+                guard self?.lastRuntimeRevision == nil else { return }
                 self?.statuses = statuses
             case .events(let events):
+                guard self?.lastRuntimeRevision == nil else { return }
                 self?.events = LATCHEvent.newestFirst(events)
+            case .runtime(let snapshot):
+                self?.applyRuntimeSnapshot(snapshot)
             }
         }
         statusSubscription = subscription
@@ -363,6 +390,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 self?.statusSubscription?.cancel()
                 self?.statusSubscription = nil
+                self?.lastRuntimeRevision = nil
                 if self?.serviceSetupInProgress == false {
                     self?.errorMessage = error.localizedDescription
                 }
@@ -372,6 +400,17 @@ final class AppModel: ObservableObject {
         proxy.subscribe(subscription.endpoint) { _ in
             Task { @MainActor in connection.invalidate() }
         }
+    }
+
+    private func applyRuntimeSnapshot(_ snapshot: LATCHRuntimeSnapshot) {
+        guard RuntimeSnapshotApplicationPolicy.shouldApply(
+            candidateRevision: snapshot.revision,
+            after: lastRuntimeRevision
+        ) else { return }
+        lastRuntimeRevision = snapshot.revision
+        statuses = snapshot.statuses
+        events = LATCHEvent.newestFirst(snapshot.events)
+        runtimeLogger.debug("Applied runtime revision \(snapshot.revision, privacy: .public) with \(snapshot.statuses.count, privacy: .public) statuses and \(snapshot.events.count, privacy: .public) events")
     }
 
     var hasPendingMonitoringServiceApproval: Bool {

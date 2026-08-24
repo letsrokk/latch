@@ -37,6 +37,77 @@ struct XPCTests {
         #expect(try LATCHStatusSinkCodec.decode(data) == .events([event]))
     }
 
+    @Test func statusSinkDeliversRevisionedRuntimeSnapshots() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let status = MountStatus(
+            definitionID: UUID(),
+            observedSource: "nas.local:/media",
+            observedMountPoint: "/Volumes/Media",
+            state: .healthy,
+            lastProbe: date,
+            lastStateChange: date,
+            lastHealthyTime: date,
+            lastRecoveryTime: nil,
+            detail: "Healthy",
+            errorCode: .none
+        )
+        let event = LATCHEvent(
+            date: date,
+            mountID: status.id,
+            state: .healthy,
+            code: .none,
+            detail: "Healthy"
+        )
+        let snapshot = LATCHRuntimeSnapshot(revision: 42, statuses: [status], events: [event])
+
+        let data = try LATCHStatusSinkCodec.encodeRuntime(snapshot)
+
+        #expect(data.count <= XPCCodec.maximumMessageBytes)
+        #expect(try LATCHStatusSinkCodec.decode(data) == .runtime(snapshot))
+    }
+
+    @Test func statusSinkRejectsOversizedCombinedRuntimeSnapshots() {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let event = LATCHEvent(
+            date: date,
+            mountID: UUID(),
+            state: .probeError,
+            code: .verificationFailed,
+            detail: String(repeating: "x", count: XPCCodec.maximumMessageBytes)
+        )
+
+        #expect(throws: XPCValidationError.oversized) {
+            _ = try LATCHStatusSinkCodec.encodeRuntime(
+                LATCHRuntimeSnapshot(revision: 1, statuses: [], events: [event])
+            )
+        }
+    }
+
+    @Test func agentRequestsUseDeadlinesThatMatchTheirSideEffects() {
+        #expect(AgentRequestDeadline.category(for: .probe(mountPoint: "/tmp/share", timeoutSeconds: 3)) == .probe)
+        #expect(AgentRequestDeadline.timeout(for: .probe(mountPoint: "/tmp/share", timeoutSeconds: 3)) == .seconds(5))
+        let app = MacApplicationDependency(bundleIdentifier: "com.example.App", applicationURL: nil, forceQuitAfterTimeout: true)
+        #expect(AgentRequestDeadline.category(for: .stop(app, timeoutSeconds: 8)) == .dependency)
+        #expect(AgentRequestDeadline.timeout(for: .stop(app, timeoutSeconds: 8)) == .seconds(18))
+        let delivery = PostMountActionDelivery(mountID: UUID(), source: "server:/share", mountPoint: "/tmp/share", actions: [])
+        #expect(AgentRequestDeadline.category(for: .executePostMountActions(delivery)) == .postMount)
+        #expect(AgentRequestDeadline.category(for: .revealManagedMount(mountPoint: "/tmp/share")) == .reveal)
+    }
+
+    @Test func agentRequestDeadlineInvalidatesANeverReplyingTransport() async {
+        let invalidated = LockedBoolean()
+
+        await #expect(throws: ResponseDeadlineError.timedOut) {
+            let _: AgentResponse = try await AgentRequestDeadline.wait(
+                for: .probe(mountPoint: "/tmp/share", timeoutSeconds: 3),
+                timeoutOverride: .milliseconds(20),
+                onTimeout: { invalidated.setTrue() }
+            ) { _ in }
+        }
+
+        #expect(invalidated.value)
+    }
+
     @Test func firstAgentRegistrationRequestsAnImmediateHealthCheck() {
         var availability = AgentConnectionAvailability()
 
@@ -184,6 +255,14 @@ struct XPCTests {
         let data = try XPCCodec.encodeRequest(request)
 
         #expect(try XPCCodec.decodeRequest(data) == request)
+    }
+
+    @Test func clearActivityReportsPersistenceFailureInsteadOfAcceptingIt() {
+        #expect(ActivityClearResponse.response(persisted: true) == .accepted)
+        #expect(ActivityClearResponse.response(persisted: false) == .failure(
+            .persistenceFailed,
+            "Recent activity could not be cleared because the change could not be saved."
+        ))
     }
 
     @Test func serverCRUDRequestsRoundTrip() throws {
@@ -389,3 +468,14 @@ private struct FailingAgentRequester: AgentRequesting {
 }
 
 private enum TestAgentError: Error { case unavailable }
+
+private final class LockedBoolean: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = false
+
+    var value: Bool { lock.withLock { storage } }
+
+    func setTrue() {
+        lock.withLock { storage = true }
+    }
+}

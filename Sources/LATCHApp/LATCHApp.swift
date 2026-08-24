@@ -32,7 +32,7 @@ struct LATCHApp: App {
         .menuBarExtraStyle(.window)
 
         Window("LATCH", id: "latch-main") {
-            SettingsView()
+            MainWindowView()
                 .environmentObject(model)
                 .frame(minWidth: 980, minHeight: 620)
                 .onAppear {
@@ -84,7 +84,7 @@ private struct LATCHCommands: Commands {
         key: KeyEquivalent
     ) -> some View {
         Button(title) {
-            model.mainDestination = destination
+            model.requestMainWindow(destination: destination)
             openWindow(id: "latch-main")
             NSApplication.shared.activate(ignoringOtherApps: true)
         }

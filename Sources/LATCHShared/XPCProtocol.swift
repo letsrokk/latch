@@ -96,12 +96,47 @@ public enum LATCHResponse: Codable, Sendable, Equatable {
     case failure(LATCHErrorCode, String)
 }
 
+public enum ActivityClearResponse {
+    public static func response(persisted: Bool) -> LATCHResponse {
+        persisted
+            ? .accepted
+            : .failure(
+                .persistenceFailed,
+                "Recent activity could not be cleared because the change could not be saved."
+            )
+    }
+}
+
+public struct LATCHRuntimeSnapshot: Codable, Sendable, Equatable {
+    public let revision: UInt64
+    public let statuses: [MountStatus]
+    public let events: [LATCHEvent]
+
+    public init(revision: UInt64, statuses: [MountStatus], events: [LATCHEvent]) {
+        self.revision = revision
+        self.statuses = statuses
+        self.events = events
+    }
+}
+
+public enum RuntimeSnapshotApplicationPolicy {
+    public static func shouldApply(candidateRevision: UInt64, after currentRevision: UInt64?) -> Bool {
+        currentRevision.map { candidateRevision > $0 } ?? true
+    }
+}
+
 public enum LATCHStatusSinkUpdate: Sendable, Equatable {
     case statuses([MountStatus])
     case events([LATCHEvent])
+    case runtime(LATCHRuntimeSnapshot)
 }
 
 public enum LATCHStatusSinkCodec {
+    private struct RuntimeEnvelope: Codable {
+        let kind: String
+        let snapshot: LATCHRuntimeSnapshot
+    }
+
     private struct ActivityEnvelope: Codable {
         let kind: String
         let events: [LATCHEvent]
@@ -113,11 +148,21 @@ public enum LATCHStatusSinkCodec {
         return data
     }
 
+    public static func encodeRuntime(_ snapshot: LATCHRuntimeSnapshot) throws -> Data {
+        let data = try JSONEncoder().encode(RuntimeEnvelope(kind: "runtime", snapshot: snapshot))
+        guard data.count <= XPCCodec.maximumMessageBytes else { throw XPCValidationError.oversized }
+        return data
+    }
+
     public static func decode(_ data: Data) throws -> LATCHStatusSinkUpdate {
         guard data.count <= XPCCodec.maximumMessageBytes else { throw XPCValidationError.oversized }
         let decoder = JSONDecoder()
         if let statuses = try? decoder.decode([MountStatus].self, from: data) {
             return .statuses(statuses)
+        }
+        if let envelope = try? decoder.decode(RuntimeEnvelope.self, from: data),
+           envelope.kind == "runtime" {
+            return .runtime(envelope.snapshot)
         }
         guard let envelope = try? decoder.decode(ActivityEnvelope.self, from: data),
               envelope.kind == "events" else {
