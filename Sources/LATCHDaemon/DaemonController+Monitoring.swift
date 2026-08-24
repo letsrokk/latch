@@ -12,7 +12,7 @@ extension DaemonController {
     func runDueChecks(forceRuleTransition: Bool = false) async {
         let date = Date()
         var jobs: [AutomaticCheckJob] = []
-        for definition in configuration.mounts {
+        for definition in configuration.mounts where definition.enabled {
             guard let token = mountWork.beginAutomatic(for: definition.id) else { continue }
             guard let resolved = resolvedDefinition(definition) else {
                 if mountWork.isCurrent(token) {
@@ -63,6 +63,7 @@ extension DaemonController {
             mountedAt[definition.id] = nil
         }
         await runDueChecks(forceRuleTransition: true)
+        wakeMonitoringLoop()
     }
 
     func applicationCoordinatorBecameAvailable() async {
@@ -71,6 +72,7 @@ extension DaemonController {
             mountedAt[definition.id] = nil
         }
         await runDueChecks()
+        wakeMonitoringLoop()
     }
 
     func checkAutomatically(
@@ -239,7 +241,7 @@ extension DaemonController {
         )
         guard await automaticWorkIsCurrent(token, definition: definition) else { return }
         if result.state == .failedClosed {
-            recoveryLogger.fault("Recovery failed closed for \(definition.id.uuidString, privacy: .public): \(result.detail, privacy: .public)")
+            recoveryLogger.fault("Recovery failed closed for \(definition.id.uuidString, privacy: .public); detail: \(result.detail, privacy: .private(mask: .hash))")
         } else {
             recoveryLogger.notice("Recovery completed for \(definition.id.uuidString, privacy: .public) with state \(result.state.rawValue, privacy: .public)")
         }
@@ -293,7 +295,8 @@ extension DaemonController {
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
         } catch {
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-            logger.error("Automatic mount failed for \(definition.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            let summary = TelemetryErrorPresentation.publicSummary(for: error)
+            logger.error("Automatic mount failed for \(definition.id.uuidString, privacy: .public): \(summary, privacy: .public); detail: \(error.localizedDescription, privacy: .private(mask: .hash))")
             let code = mountFailureCode(for: error)
             let retryDisposition = AutomaticRetryState.disposition(after: code)
             if retryDisposition != .schedule {

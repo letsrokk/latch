@@ -45,7 +45,10 @@ extension DaemonController {
             await record(status(definition, source: nil, state: initialState, code: .none, detail: detail, at: Date()))
         }
         if transition.shouldScheduleAutomaticCheck {
-            Task { [weak self] in await self?.runDueChecks() }
+            Task { [weak self] in
+                await self?.runDueChecks()
+                await self?.wakeMonitoringLoop()
+            }
         }
     }
 
@@ -279,7 +282,8 @@ extension DaemonController {
                 ifCurrent: { [mountWork] in mountWork.isCurrent(token) }
             )
         } catch {
-            persistenceLogger.notice("Unable to persist automatic retry state for \(definition.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            let summary = TelemetryErrorPresentation.publicSummary(for: error)
+            persistenceLogger.notice("Unable to persist automatic retry state for \(definition.id.uuidString, privacy: .public): \(summary, privacy: .public); detail: \(error.localizedDescription, privacy: .private(mask: .hash))")
             return .failed(error.localizedDescription)
         }
         guard committed else { return .superseded }
@@ -374,7 +378,7 @@ extension DaemonController {
         onStatusesChanged(Array(statuses.values))
         let requiresImmediateWrite = RuntimePersistencePolicy.requiresImmediateWrite(previous: old, next: status)
         if requiresImmediateWrite {
-            stateLogger.notice("Mount \(status.id.uuidString, privacy: .public) changed to \(status.state.rawValue, privacy: .public): \(status.detail, privacy: .public)")
+            stateLogger.notice("Mount \(status.id.uuidString, privacy: .public) changed to \(status.state.rawValue, privacy: .public); detail: \(status.detail, privacy: .private(mask: .hash))")
             appendEvent(.init(
                 id: UUID(),
                 date: Date(),
@@ -448,13 +452,14 @@ extension DaemonController {
             try await operation()
             return true
         } catch {
-            persistenceLogger.notice("Persistence write failed: \(error.localizedDescription, privacy: .public)")
+            let summary = TelemetryErrorPresentation.publicSummary(for: error)
+            persistenceLogger.notice("Persistence write failed: \(summary, privacy: .public); detail: \(error.localizedDescription, privacy: .private(mask: .hash))")
             return false
         }
     }
 
     func recordWakeEvent(server: NFSServerProfile, detail: String) async {
-        stateLogger.notice("Wake-on-LAN for server \(server.id.uuidString, privacy: .public): \(detail, privacy: .public)")
+        stateLogger.notice("Wake-on-LAN for server \(server.id.uuidString, privacy: .public); detail: \(detail, privacy: .private(mask: .hash))")
         appendEvent(.init(date: Date(), mountID: nil, state: .waking, code: .none, detail: detail))
         await persistRuntime()
     }

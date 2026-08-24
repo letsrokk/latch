@@ -46,7 +46,8 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
         switch request {
         case .probe(let mountPoint, let timeoutSeconds):
             let result = await probeRunner.run(mountPoint: mountPoint, timeoutSeconds: timeoutSeconds)
-            logger.notice("User-context probe completed: \(String(describing: result), privacy: .public)")
+            let summary = ProbeTelemetryPresentation.publicSummary(for: result)
+            logger.notice("User-context probe completed: \(summary, privacy: .public); detail: \(String(describing: result), privacy: .private(mask: .hash))")
             return .probe(result)
         case .dependencyPrepare(let dependency):
             try await executeDependency(dependency, operation: .prepare)

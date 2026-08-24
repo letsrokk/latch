@@ -29,7 +29,7 @@ struct MainWindowView: View {
                 .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 200)
         } detail: {
             detail
-                .navigationTitle("")
+                .navigationTitle(LATCHMainWindowPresentation.title)
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)

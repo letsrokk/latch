@@ -194,7 +194,8 @@ actor SystemMountOperator: MountOperating {
         let result = await probeRunner.run(mountPoint: definition.mountPoint, timeoutSeconds: definition.probeTimeoutSeconds)
         try cancellation.throwIfCancelled()
         if ProbeClassifier.classify(result).state != .healthy {
-            probeLogger.error("Probe for \(definition.id.uuidString, privacy: .public) failed: \(String(describing: result), privacy: .public)")
+            let summary = ProbeTelemetryPresentation.publicSummary(for: result)
+            probeLogger.error("Probe for \(definition.id.uuidString, privacy: .public) failed: \(summary, privacy: .public); detail: \(String(describing: result), privacy: .private(mask: .hash))")
         }
         return result
     }

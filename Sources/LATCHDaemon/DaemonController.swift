@@ -57,6 +57,7 @@ actor DaemonController {
     var events: [LATCHEvent] = []
     var networkVolumesVerification: NetworkVolumesVerificationState = .notChecked
     var monitoringTask: Task<Void, Never>?
+    var monitoringSleepTask: Task<Void, Never>?
     var runtimePersistenceTask: Task<Void, Never>?
     var runtimePersistenceGeneration: UInt64 = 0
     var operationTasks: [UUID: Task<Void, Never>] = [:]
@@ -117,9 +118,42 @@ actor DaemonController {
             while !Task.isCancelled {
                 await self.runDueChecks(forceRuleTransition: isInitialEvaluation)
                 isInitialEvaluation = false
-                try? await Task.sleep(for: .seconds(1))
+                let sleepTask = await self.prepareMonitoringSleep()
+                await sleepTask.value
+                await self.setMonitoringSleepTask(nil)
             }
         }
+    }
+
+    private func setMonitoringSleepTask(_ task: Task<Void, Never>?) {
+        monitoringSleepTask = task
+    }
+
+    private func prepareMonitoringSleep() -> Task<Void, Never> {
+        let delay = monitoringLoopDelay()
+        let task = Task {
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                // Cancellation wakes the scheduler after configuration or runtime events.
+            }
+        }
+        monitoringSleepTask = task
+        return task
+    }
+
+    func wakeMonitoringLoop() {
+        monitoringSleepTask?.cancel()
+    }
+
+    private func monitoringLoopDelay(at date: Date = Date()) -> TimeInterval {
+        MonitoringLoopSchedule.delay(
+            definitions: configuration.mounts,
+            lastChecks: lastChecks,
+            mountedAt: mountedAt,
+            now: date,
+            mountGrace: firstHealthCheckGrace
+        )
     }
 
     func handle(_ request: LATCHRequest) async -> LATCHResponse {
@@ -304,7 +338,8 @@ actor DaemonController {
                 return .accepted
             }
         } catch {
-            logger.error("Request failed: \(error.localizedDescription, privacy: .public)")
+            let summary = TelemetryErrorPresentation.publicSummary(for: error)
+            logger.error("Request failed: \(summary, privacy: .public); detail: \(error.localizedDescription, privacy: .private(mask: .hash))")
             return .failure(.verificationFailed, error.localizedDescription)
         }
     }
@@ -312,6 +347,7 @@ actor DaemonController {
     private func persistConfiguration(_ candidate: LATCHConfiguration) throws {
         do {
             try store.save(candidate)
+            wakeMonitoringLoop()
             configurationPersistenceHealth = PersistenceHealthSnapshot(lastSuccessfulWriteAt: Date())
         } catch {
             recordConfigurationPersistenceFailure(error)
@@ -389,7 +425,7 @@ actor DaemonController {
                     detail: "Operation cancelled."
                 )
             case .failed(let code, let detail):
-                self.logger.error("Queued operation failed: \(code.rawValue, privacy: .public) / \(detail, privacy: .public)")
+                self.logger.error("Queued operation failed: \(code.rawValue, privacy: .public); detail: \(detail, privacy: .private(mask: .hash))")
                 await self.updateOperation(operationID, state: .failed, canCancel: false, detail: detail)
             case .succeeded:
                 self.logger.notice("Queued operation completed: \(operationID.uuidString, privacy: .public)")

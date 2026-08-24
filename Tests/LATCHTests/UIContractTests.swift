@@ -4,6 +4,92 @@ import Testing
 
 @Suite("Option presentation contract")
 struct UIContractTests {
+    @Test func mainWindowAndSidebarExposeOnlyNamedNavigationElements() {
+        #expect(LATCHMainWindowPresentation.title == "LATCH")
+        #expect(LATCHSidebarPresentation.destinations == [
+            .overview,
+            .managed,
+            .servers,
+            .external,
+            .activity,
+            .settings,
+        ])
+    }
+
+    @Test func serverActionMenusIdentifyTheirServer() {
+        #expect(ServerActionsAccessibility.label(serverName: "Media NAS") == "Actions for Media NAS")
+        #expect(ServerActionsAccessibility.hint == "Opens server actions")
+    }
+
+    @Test func monitoringLoopSleepsUntilTheNextEnabledMountCheck() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let enabled = MountDefinition(
+            displayName: "Media",
+            host: "nas.local",
+            exportPath: "/media",
+            mountPoint: "/Volumes/Media",
+            probeIntervalSeconds: 8
+        )
+        var disabled = enabled
+        disabled.id = UUID()
+        disabled.enabled = false
+
+        #expect(MonitoringLoopSchedule.delay(
+            definitions: [enabled],
+            lastChecks: [enabled.id: now.addingTimeInterval(-3)],
+            mountedAt: [:],
+            now: now,
+            mountGrace: 3
+        ) == 5)
+        #expect(MonitoringLoopSchedule.delay(
+            definitions: [enabled],
+            lastChecks: [:],
+            mountedAt: [enabled.id: now.addingTimeInterval(-1)],
+            now: now,
+            mountGrace: 3
+        ) == 2)
+        #expect(MonitoringLoopSchedule.delay(
+            definitions: [enabled],
+            lastChecks: [enabled.id: now.addingTimeInterval(-20)],
+            mountedAt: [:],
+            now: now,
+            mountGrace: 3
+        ) == 1)
+        #expect(MonitoringLoopSchedule.delay(
+            definitions: [disabled],
+            lastChecks: [:],
+            mountedAt: [:],
+            now: now,
+            mountGrace: 3
+        ) == 60)
+    }
+
+    @Test func publicTelemetrySummaryOmitsCommandPayloadsAndPaths() {
+        let error = SystemCommandError(
+            executable: "/sbin/mount",
+            status: 1,
+            detail: "can't mount nas.private:/secret on /Users/alice/Media"
+        )
+
+        let summary = TelemetryErrorPresentation.publicSummary(for: error)
+
+        #expect(summary == "mount failed with exit status 1.")
+        #expect(!summary.contains("nas.private"))
+        #expect(!summary.contains("/secret"))
+        #expect(!summary.contains("/Users/alice"))
+
+        let genericSummary = TelemetryErrorPresentation.publicSummary(
+            for: NSError(domain: "/Users/alice/Library/PrivateState", code: 17)
+        )
+        #expect(genericSummary == "Operation failed with error code 17.")
+        #expect(!genericSummary.contains("alice"))
+
+        let probeSummary = ProbeTelemetryPresentation.publicSummary(
+            for: ProbeResult(metadataErrno: EIO, failedOperation: .metadata)
+        )
+        #expect(probeSummary == "probeError/verificationFailed")
+    }
+
     @Test func overviewHasItsOwnScreenIdentityAboveManagedMounts() {
         #expect(LATCHOverviewHeaderPresentation.title == "Overview")
         #expect(LATCHOverviewHeaderPresentation.subtitle == "Managed volume health and recent recovery activity.")

@@ -230,6 +230,8 @@ struct ServersScreen: View {
                             Button("Remove", role: .destructive) { remove(server) }
                         } label: { Image(systemName: "ellipsis.circle") }
                         .menuStyle(.borderlessButton)
+                        .accessibilityLabel(ServerActionsAccessibility.label(serverName: server.name))
+                        .accessibilityHint(ServerActionsAccessibility.hint)
                         Circle()
                             .fill(presentation.indicator == .ready ? Color.green : Color.red)
                             .frame(width: 9, height: 9)

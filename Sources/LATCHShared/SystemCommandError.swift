@@ -17,3 +17,14 @@ public struct SystemCommandError: Error, Sendable, Equatable, LocalizedError {
         return "\(name) failed with exit status \(status): \(detail)"
     }
 }
+
+public enum TelemetryErrorPresentation {
+    public static func publicSummary(for error: Error) -> String {
+        if let commandError = error as? SystemCommandError {
+            let name = URL(fileURLWithPath: commandError.executable).lastPathComponent
+            return "\(name) failed with exit status \(commandError.status)."
+        }
+        let error = error as NSError
+        return "Operation failed with error code \(error.code)."
+    }
+}

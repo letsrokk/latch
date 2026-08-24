@@ -24,12 +24,8 @@ struct MainSidebarView: View {
             .padding(.vertical, 15)
 
             List(selection: $selection) {
-                ForEach(LATCHMainDestination.allCases.filter { $0 != .settings }) { destination in
+                ForEach(LATCHSidebarPresentation.destinations) { destination in
                     Label(destination.title, systemImage: destination.symbol).tag(destination)
-                }
-                Section {
-                    Label(LATCHMainDestination.settings.title, systemImage: LATCHMainDestination.settings.symbol)
-                        .tag(LATCHMainDestination.settings)
                 }
             }
             .listStyle(.sidebar)

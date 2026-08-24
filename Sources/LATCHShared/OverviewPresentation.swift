@@ -198,6 +198,34 @@ public enum MountCheckSchedule {
     }
 }
 
+public enum MonitoringLoopSchedule {
+    public static let minimumDelay: TimeInterval = 1
+    public static let idleDelay: TimeInterval = 60
+
+    public static func delay(
+        definitions: [MountDefinition],
+        lastChecks: [UUID: Date],
+        mountedAt: [UUID: Date],
+        now: Date,
+        mountGrace: TimeInterval
+    ) -> TimeInterval {
+        definitions.lazy
+            .filter(\.enabled)
+            .map { definition in
+                let remaining: TimeInterval
+                if let mounted = mountedAt[definition.id], lastChecks[definition.id] == nil {
+                    remaining = mountGrace - now.timeIntervalSince(mounted)
+                } else if let lastCheck = lastChecks[definition.id] {
+                    remaining = Double(definition.probeIntervalSeconds) - now.timeIntervalSince(lastCheck)
+                } else {
+                    remaining = 0
+                }
+                return max(minimumDelay, remaining)
+            }
+            .min() ?? idleDelay
+    }
+}
+
 public extension MountState {
     var displayName: String {
         switch self {

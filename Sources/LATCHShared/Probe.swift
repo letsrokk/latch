@@ -88,6 +88,13 @@ public enum ProbeClassifier {
     }
 }
 
+public enum ProbeTelemetryPresentation {
+    public static func publicSummary(for result: ProbeResult) -> String {
+        let classification = ProbeClassifier.classify(result)
+        return "\(classification.state.rawValue)/\(classification.code.rawValue)"
+    }
+}
+
 /// Runtime health probes report mount health, not whether the daemon passed the
 /// explicit Network Volumes permission check. A previously verified gate stays
 /// open across ESTALE, timeouts, and ordinary I/O failures. Only an explicit TCC

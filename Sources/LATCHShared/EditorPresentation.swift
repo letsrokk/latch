@@ -33,6 +33,22 @@ public enum LATCHMainDestination: String, CaseIterable, Identifiable, Hashable, 
     }
 }
 
+public enum LATCHMainWindowPresentation {
+    public static let title = "LATCH"
+}
+
+public enum LATCHSidebarPresentation {
+    public static let destinations = LATCHMainDestination.allCases
+}
+
+public enum ServerActionsAccessibility {
+    public static func label(serverName: String) -> String {
+        "Actions for \(serverName)"
+    }
+
+    public static let hint = "Opens server actions"
+}
+
 public enum MainWindowDestinationRestorationPolicy {
     public static func destination(
         stored: LATCHMainDestination?,
