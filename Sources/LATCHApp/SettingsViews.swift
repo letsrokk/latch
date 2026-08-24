@@ -123,10 +123,12 @@ struct SettingsView: View {
                 definitions: model.configuration.mounts,
                 configuration: model.configuration,
                 statuses: model.statuses,
+                operations: model.operationSnapshots.values.filter { !$0.state.isTerminal },
                 addMount: { draft = .new },
                 edit: { draft = MountDraft(editing: $0) },
                 remove: { removeTarget = $0 },
-                action: requestAction
+                action: requestAction,
+                cancel: { operationID in Task { await model.cancelOperation(operationID) } }
             )
         case .servers:
             ServersScreen(

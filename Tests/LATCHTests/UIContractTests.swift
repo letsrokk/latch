@@ -4,6 +4,20 @@ import Testing
 
 @Suite("Option presentation contract")
 struct UIContractTests {
+    @Test func macOSAppDeclaresNativeSettingsCommandsAndMenuEntry() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSource = try String(contentsOf: root.appending(path: "Sources/LATCHApp/LATCHApp.swift"), encoding: .utf8)
+        let menuSource = try String(contentsOf: root.appending(path: "Sources/LATCHApp/MountViews.swift"), encoding: .utf8)
+
+        #expect(appSource.contains("Settings {"))
+        #expect(appSource.contains(".commands {"))
+        #expect(appSource.contains("LATCHCommands(model: model)"))
+        #expect(menuSource.contains("SettingsLink"))
+    }
+
     @Test func monitoringSetupAndSupportCopyUsesFinalLabels() {
         #expect(LATCHInterfaceCopy.setupSectionTitle == "Monitoring Setup")
         #expect(LATCHInterfaceCopy.setupRequiredTitle == "Monitoring needs setup")
@@ -304,6 +318,17 @@ struct UIContractTests {
         #expect(!ManagedMountMenuPresentation.isEnabled(.reveal, monitoringEnabled: true, canReveal: false))
     }
 
+    @Test func activeOperationDisablesEveryConflictingManagedMountAction() {
+        for action in ManagedMountMenuPresentation.sections(includeRemoval: true).flatMap({ $0 }) {
+            #expect(!ManagedMountMenuPresentation.isEnabled(
+                action,
+                monitoringEnabled: true,
+                canReveal: true,
+                operationActive: true
+            ))
+        }
+    }
+
     @Test func serverEditorRequiresANameAndValidHostBeforeSaving() {
         #expect(ServerEditorValidation.issues(for: .init(name: "", hostname: "")).map(\.field) == [.name, .hostname])
         #expect(ServerEditorValidation.issues(for: .init(name: "Media NAS", hostname: "nas local")).map(\.field) == [.hostname])
@@ -344,6 +369,39 @@ struct UIContractTests {
             ) { _ in }
         }
         #expect(cancelled.value)
+    }
+
+    @Test func responseDeadlineCancelsThePendingServiceRequestWhenItsParentTaskIsCancelled() async {
+        let cancelled = LockedFlag()
+        let task = Task {
+            let _: String = try await ResponseDeadline.wait(
+                for: .seconds(10),
+                onTimeout: { cancelled.set() }
+            ) { _ in }
+        }
+        try? await Task.sleep(for: .milliseconds(20))
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(cancelled.value)
+    }
+
+    @Test func responseDeadlineCanJoinABoundedSideEffectAfterParentCancellation() async throws {
+        let task = Task {
+            try await ResponseDeadline.wait(
+                for: .seconds(1),
+                cancellationBehavior: .awaitResponse
+            ) { reply in
+                Task.detached {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    reply(.success("completed"))
+                }
+            } as String
+        }
+        try? await Task.sleep(for: .milliseconds(10))
+        task.cancel()
+
+        #expect(try await task.value == "completed")
     }
 
     @Test func newMountSuggestionUsesTheUsersHomeAndDisplayName() {

@@ -93,10 +93,12 @@ struct ManagedMountsScreen: View {
     let definitions: [MountDefinition]
     let configuration: LATCHConfiguration
     let statuses: [MountStatus]
+    let operations: [OperationSnapshot]
     let addMount: () -> Void
     let edit: (MountDefinition) -> Void
     let remove: (MountDefinition) -> Void
     let action: (LATCHAction, MountDefinition) -> Void
+    let cancel: (UUID) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -109,13 +111,16 @@ struct ManagedMountsScreen: View {
             Table(definitions) {
                 TableColumn("Status") { definition in
                     let status = statuses.first { $0.definitionID == definition.id }
+                    let operation = operations.first { $0.mountID == definition.id }
                     HStack(spacing: 8) {
                         ManagedMountActions(
                             definition: definition,
                             canReveal: status?.observedSource == configuration.resolve(definition)?.source,
+                            operation: operation,
                             edit: { edit(definition) },
                             remove: { remove(definition) },
-                            action: { action($0, definition) }
+                            action: { action($0, definition) },
+                            cancel: cancel
                         )
                         MountStatusIndicatorDot(status: status, enabled: definition.enabled)
                     }
@@ -150,8 +155,13 @@ struct ManagedMountsScreen: View {
 
                 TableColumn("State") { definition in
                     let status = statuses.first { $0.definitionID == definition.id }
+                    let operation = operations.first { $0.mountID == definition.id }
                     VStack(alignment: .leading, spacing: 2) {
-                        MountStatusLabel(status: status, enabled: definition.enabled)
+                        if let operation {
+                            Text(operation.detail ?? "Operation in progress").lineLimit(2)
+                        } else {
+                            MountStatusLabel(status: status, enabled: definition.enabled)
+                        }
                         if let summaries = status?.unmetRuleSummaries, !summaries.isEmpty {
                             Text(summaries.joined(separator: ", ")).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                         }

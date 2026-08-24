@@ -52,7 +52,7 @@ extension AppModel {
             let response = try await send(.perform(definition.id, action, confirmed: confirmed))
             switch response {
             case .operationAccepted(let receipt):
-                await monitorOperation(receipt)
+                beginMonitoring(receipt)
             case .failure(_, let detail):
                 errorMessage = detail
                 await refresh()
@@ -76,7 +76,7 @@ extension AppModel {
         }
     }
 
-    private func monitorOperation(_ receipt: OperationReceipt) async {
+    private func beginMonitoring(_ receipt: OperationReceipt) {
         operationSnapshots[receipt.id] = OperationSnapshot(
             id: receipt.id,
             mountID: receipt.mountID,
@@ -86,41 +86,62 @@ extension AppModel {
             detail: "Operation queued.",
             updatedAt: receipt.startedAt
         )
+        startMonitoringOperation(receipt.id)
+    }
 
-        defer {
-            operationSnapshots[receipt.id] = nil
-            Task { @MainActor [weak self] in await self?.refresh() }
+    func reconcileOperations(_ snapshots: [OperationSnapshot]) {
+        operationSnapshots = OperationMonitoringPolicy.reconcile(snapshots)
+        let activeIDs = Set(snapshots.filter { OperationMonitoringPolicy.shouldMonitor($0.state) }.map(\.id))
+
+        let staleMonitorIDs = operationMonitorTasks.keys.filter { !activeIDs.contains($0) }
+        for operationID in staleMonitorIDs {
+            operationMonitorTasks[operationID]?.cancel()
+            operationMonitorTasks[operationID] = nil
         }
+        for operationID in activeIDs { startMonitoringOperation(operationID) }
+    }
 
-        for attempt in 0..<120 where !Task.isCancelled {
+    private func startMonitoringOperation(_ operationID: UUID) {
+        guard operationMonitorTasks[operationID] == nil else { return }
+        operationMonitorTasks[operationID] = Task { @MainActor [weak self] in
+            await self?.monitorOperation(operationID)
+        }
+    }
+
+    private func monitorOperation(_ operationID: UUID) async {
+        defer { operationMonitorTasks[operationID] = nil }
+        var consecutiveFailures = 0
+
+        while !Task.isCancelled {
             do {
-                let response = try await send(.getOperation(receipt.id))
+                let response = try await send(.getOperation(operationID))
                 guard case .operationSnapshot(let snapshot) = response else {
                     errorMessage = "The daemon returned an invalid operation response."
                     return
                 }
-                operationSnapshots[receipt.id] = snapshot
-                switch snapshot.state {
-                case .accepted, .running:
-                    break
-                case .succeeded, .failed, .cancelled:
+                consecutiveFailures = 0
+                operationSnapshots[operationID] = snapshot
+                if snapshot.state.isTerminal {
                     if snapshot.state == .failed || snapshot.state == .cancelled {
                         errorMessage = snapshot.detail
                     }
                     return
                 }
-                let delayMilliseconds = min(150 + attempt * 100, 1_000)
-                try await Task.sleep(for: .milliseconds(delayMilliseconds))
+                try await Task.sleep(for: .seconds(1))
             } catch is CancellationError {
                 return
             } catch {
-                errorMessage = error.localizedDescription
-                return
+                consecutiveFailures += 1
+                if consecutiveFailures == 3 { errorMessage = error.localizedDescription }
+                let delay = OperationMonitoringPolicy.retryDelayMilliseconds(
+                    afterConsecutiveFailure: consecutiveFailures
+                )
+                do {
+                    try await Task.sleep(for: .milliseconds(delay))
+                } catch {
+                    return
+                }
             }
-        }
-
-        if errorMessage == nil {
-            errorMessage = "The operation did not finish before the status timeout."
         }
     }
 

@@ -31,6 +31,7 @@ final class AppModel: ObservableObject {
     let mainApplicationService = SMAppService.mainApp
     private var statusSubscription: StatusSubscription?
     private var refreshTask: Task<Void, Never>?
+    var operationMonitorTasks: [UUID: Task<Void, Never>] = [:]
     private var approvalRefreshTask: Task<Void, Never>?
     var serviceApprovalPromptSuppressed = false
     var serviceRepairAttempted = false
@@ -148,6 +149,7 @@ final class AppModel: ObservableObject {
         if case .externalMounts(let value) = try await send(.getExternalMounts) { externalMounts = value }
         if case .discoveredServers(let value) = try await send(.getDiscoveredServers) { discoveredServers = value }
         if case .events(let value) = try await send(.getRecentEvents(limit: 100)) { events = LATCHEvent.newestFirst(value) }
+        if case .operationSnapshots(let value) = try await send(.getOperations) { reconcileOperations(value) }
     }
 
     func uninstall(unmountOwned: Bool, removeState: Bool) async {
@@ -325,6 +327,8 @@ final class AppModel: ObservableObject {
     func suspendLiveUpdates() {
         refreshTask?.cancel()
         refreshTask = nil
+        operationMonitorTasks.values.forEach { $0.cancel() }
+        operationMonitorTasks.removeAll()
         operationSnapshots.removeAll()
         stopApprovalRefreshWindow()
         statusSubscription?.cancel()

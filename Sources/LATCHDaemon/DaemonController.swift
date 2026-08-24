@@ -5,11 +5,28 @@ import OSLog
 final class OperationCancellationToken: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private var interruption: OperationInterruption = .none
 
     var isCancelled: Bool { lock.withLock { cancelled } }
+    var observedInterruption: OperationInterruption { lock.withLock { interruption } }
 
     func cancel() {
         lock.withLock { cancelled = true }
+    }
+
+    @discardableResult
+    func observeCancellation() -> Bool {
+        lock.withLock {
+            guard cancelled else { return false }
+            interruption = .cancellationObserved
+            return true
+        }
+    }
+
+    func observeSupersession() {
+        lock.withLock {
+            if interruption == .none { interruption = .supersessionObserved }
+        }
     }
 }
 
@@ -100,6 +117,8 @@ actor DaemonController {
                 ))
             case .getStatus: return .statuses(Array(statuses.values))
             case .getConfiguration: return .configuration(configuration)
+            case .getOperations:
+                return .operationSnapshots(operationSnapshots.values.sorted { $0.updatedAt > $1.updatedAt })
             case .exportPortableConfiguration:
                 return .portableConfiguration(try PortableConfigurationCodec.export(configuration))
             case .previewPortableConfiguration(let data):
@@ -261,6 +280,9 @@ actor DaemonController {
     }
 
     private func queueOperation(action: LATCHAction, definition: MountDefinition, confirmed: Bool) -> LATCHResponse {
+        if OperationLifecycle.conflict(for: definition.id, in: operationSnapshots.values) != nil {
+            return .failure(.mountConflict, "Another operation is already active for this mount.")
+        }
         let operationID = UUID()
         let receipt = OperationReceipt(id: operationID, mountID: definition.id, action: action)
         let cancellation = OperationCancellationToken()
@@ -295,7 +317,8 @@ actor DaemonController {
                 confirmed: confirmed,
                 operationCancellation: cancellation
             )
-            if cancellation.isCancelled || Task.isCancelled {
+            switch OperationLifecycle.completion(response: response, interruption: cancellation.observedInterruption) {
+            case .cancelled:
                 self.logger.notice("Queued operation cancelled: \(operationID.uuidString, privacy: .public)")
                 await self.updateOperation(
                     operationID,
@@ -303,10 +326,10 @@ actor DaemonController {
                     canCancel: false,
                     detail: "Operation cancelled."
                 )
-            } else if case .failure(let code, let detail) = response {
+            case .failed(let code, let detail):
                 self.logger.error("Queued operation failed: \(code.rawValue, privacy: .public) / \(detail, privacy: .public)")
                 await self.updateOperation(operationID, state: .failed, canCancel: false, detail: detail)
-            } else {
+            case .succeeded:
                 self.logger.notice("Queued operation completed: \(operationID.uuidString, privacy: .public)")
                 await self.updateOperation(operationID, state: .succeeded, canCancel: false, detail: "Operation completed.")
             }
@@ -349,9 +372,6 @@ actor DaemonController {
             return .operationSnapshot(current)
         }
         operationCancellations[operationID]?.cancel()
-        if let mountID = operationMountIDs[operationID] {
-            mountWork.invalidate(mountID)
-        }
         operationTasks[operationID]?.cancel()
         logger.notice("Queued operation cancellation requested: \(operationID.uuidString, privacy: .public)")
         let requested = OperationSnapshot(
@@ -369,11 +389,8 @@ actor DaemonController {
 
     private func trimOperationSnapshots() {
         guard operationSnapshots.count > 100 else { return }
-        let terminal = operationSnapshots.values
-            .filter { !$0.canCancel }
-            .sorted { $0.updatedAt < $1.updatedAt }
-        for snapshot in terminal.prefix(operationSnapshots.count - 100) {
-            operationSnapshots.removeValue(forKey: snapshot.id)
+        for operationID in OperationLifecycle.pruningIDs(from: operationSnapshots.values, limit: 100) {
+            operationSnapshots.removeValue(forKey: operationID)
         }
     }
 
@@ -383,7 +400,7 @@ actor DaemonController {
         confirmed: Bool,
         operationCancellation: OperationCancellationToken? = nil
     ) async -> LATCHResponse {
-        guard !(operationCancellation?.isCancelled ?? false) else { return .accepted }
+        guard operationCancellation?.observeCancellation() != true else { return .accepted }
         var activeToken: MountWorkToken?
         defer {
             if let activeToken { mountWork.finishManual(activeToken) }
@@ -395,67 +412,76 @@ actor DaemonController {
                 activeToken = token
                 let cancellation = mountCancellation(for: token, operationCancellation: operationCancellation)
                 let evaluation = await ruleEvaluation(for: definition)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 if let evaluation, !evaluation.isSatisfied {
                     await record(waitingForRulesStatus(definition, evaluation: evaluation, at: Date()))
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .accepted
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 let networkAvailable = await mounts.networkAvailable(for: definition.host)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 guard networkAvailable else {
                     await record(status(definition, source: nil, state: .networkUnavailable, code: .networkUnavailable, detail: "The NFS server is not reachable.", at: Date()))
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .accepted
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 let source = try await mounts.currentSource(at: definition.mountPoint)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 guard let source else {
                     await record(status(definition, source: nil, state: .unmounted, code: .none, detail: "The configured volume is not mounted.", at: Date()))
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .accepted
                 }
                 guard source == definition.source else {
                     await record(status(definition, source: source, state: .probeError, code: .sourceMismatch, detail: "A different source owns the configured mountpoint.", at: Date()))
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .accepted
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 let rawProbe = try await mounts.probe(definition, cancellation: cancellation)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 let probe = annotatePermission(rawProbe)
                 await observeRuntimePermission(probe)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 await record(HealthMonitor.decision(definition: definition, observedSource: source, result: probe, previous: statuses[definition.id], at: Date()).status)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
             case .mount:
                 let token = mountWork.beginManual(for: definition.id)
                 activeToken = token
                 let cancellation = mountCancellation(for: token, operationCancellation: operationCancellation)
-                let _ = await withPersistenceIgnoreError { [weak self] in
-                    try await self?.stateStore.setPaused(false, for: definition.id)
+                do {
+                    let committed = try await stateStore.setMonitoringState(
+                        paused: false,
+                        automaticRetry: nil,
+                        for: definition.id,
+                        ifCurrent: { [mountWork] in mountWork.isCurrent(token) }
+                    )
+                    guard committed else {
+                        operationCancellation?.observeSupersession()
+                        return .accepted
+                    }
+                } catch {
+                    let detail = "Mount was not attempted because monitoring state could not be persisted: \(error.localizedDescription)"
+                    await record(status(definition, source: nil, state: .probeError, code: .verificationFailed, detail: detail, at: Date()))
+                    return .failure(.verificationFailed, detail)
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
-                let _ = await withPersistenceIgnoreError { [weak self] in
-                    try await self?.stateStore.setAutomaticRetryState(nil, for: definition.id)
-                }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 await record(status(definition, source: nil, state: .mounting, code: .none, detail: "Mounting the configured NFS volume.", at: Date()))
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 let currentSource = try await mounts.currentSource(at: definition.mountPoint)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 switch MountRequestDisposition.classify(
                     currentSource: currentSource,
                     expectedSource: definition.source
                 ) {
                 case .alreadyMounted:
                     await didMount(definition, previousSource: currentSource, token: token)
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .accepted
                 case .sourceConflict:
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     await record(status(
                         definition,
                         source: currentSource,
@@ -464,95 +490,138 @@ actor DaemonController {
                         detail: "A different source owns the configured mountpoint.",
                         at: Date()
                     ))
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .failure(.sourceMismatch, "A different source owns the configured mountpoint.")
                 case .mount:
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     await withPersistenceIgnoreError { [weak self] in
                         try await self?.stateStore.clearPostMountActions(for: definition.id)
                     }
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     break
                 }
                 let live = try externalMounts()
                 try ConfigurationValidator().validate(configuration, liveMounts: live)
                 try await mountExecutor.mount(definition, cancellation: cancellation)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 await didMount(definition, previousSource: currentSource, token: token)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
             case .unmount:
                 guard confirmed else { return .failure(.mountConflict, "Unmounting requires explicit confirmation.") }
                 let token = mountWork.beginManual(for: definition.id)
                 activeToken = token
                 let cancellation = mountCancellation(for: token, operationCancellation: operationCancellation)
                 await coordinator.waitUntilIdle()
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 let source = try await mounts.currentSource(at: definition.mountPoint)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 if let source, source != definition.source {
                     return .failure(.sourceMismatch, "A different source owns the configured mountpoint.")
                 }
-                if source != nil {
-                    try await mounts.forceUnmount(
-                        definition.mountPoint,
-                        expectedSource: definition.source,
-                        cancellation: cancellation
+                let previousPaused = await stateStore.isPaused(definition.id)
+                let previousRetry = await stateStore.automaticRetryState(for: definition.id)
+                do {
+                    let committed = try await stateStore.setMonitoringState(
+                        paused: true,
+                        automaticRetry: nil,
+                        for: definition.id,
+                        ifCurrent: { [mountWork] in mountWork.isCurrent(token) }
                     )
+                    guard committed else {
+                        operationCancellation?.observeSupersession()
+                        return .accepted
+                    }
+                } catch {
+                    let detail = "Unmount was not attempted because monitoring could not be paused: \(error.localizedDescription)"
+                    await record(status(definition, source: source, state: source == nil ? .unmounted : .probeError, code: .verificationFailed, detail: detail, at: Date()))
+                    return .failure(.verificationFailed, detail)
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                do {
+                    if source != nil {
+                        try await mounts.forceUnmount(
+                            definition.mountPoint,
+                            expectedSource: definition.source,
+                            cancellation: cancellation
+                        )
+                    }
+                } catch {
+                    do {
+                        let rolledBack = try await stateStore.setMonitoringState(
+                            paused: previousPaused,
+                            automaticRetry: previousRetry,
+                            for: definition.id,
+                            ifCurrent: { [mountWork] in mountWork.isCurrent(token) }
+                        )
+                        if !rolledBack { operationCancellation?.observeSupersession() }
+                    } catch {
+                        let detail = "Unmount failed and the previous monitoring state could not be restored: \(error.localizedDescription)"
+                        await record(status(definition, source: source, state: .probeError, code: .verificationFailed, detail: detail, at: Date()))
+                        return .failure(.verificationFailed, detail)
+                    }
+                    throw error
+                }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 await withPersistenceIgnoreError { [weak self] in
                     try await self?.stateStore.clearPostMountActions(for: definition.id)
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
-                let _ = await withPersistenceIgnoreError { [weak self] in
-                    try await self?.stateStore.setPaused(true, for: definition.id)
-                }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
-                let _ = await withPersistenceIgnoreError { [weak self] in
-                    try await self?.stateStore.setAutomaticRetryState(nil, for: definition.id)
-                }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 await record(status(definition, source: nil, state: .disabled, code: .none, detail: "Monitoring is paused for this mount.", at: Date()))
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
             case .recover:
                 guard confirmed else { return .failure(.unauthorized, "Manual recovery requires explicit confirmation.") }
                 let token = mountWork.beginManual(for: definition.id)
                 activeToken = token
                 let evaluation = await ruleEvaluation(for: definition)
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 if let evaluation, !evaluation.isSatisfied {
                     await record(waitingForRulesStatus(definition, evaluation: evaluation, at: Date()))
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .accepted
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 await record(status(definition, source: definition.source, state: .recovering, code: .none, detail: "Manual guarded recovery is in progress.", at: Date()))
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 let result = await coordinator.recover(
                     definition,
                     trigger: .manual,
                     isCancelled: { [mountWork, operationCancellation] in
-                        !mountWork.isCurrent(token) || operationCancellation?.isCancelled == true
+                        if operationCancellation?.observeCancellation() == true { return true }
+                        let isCurrent = mountWork.isCurrent(token)
+                        if !isCurrent { operationCancellation?.observeSupersession() }
+                        return !isCurrent
                     }
                 )
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualWorkIsCurrent(token, definition: definition, observingSupersession: operationCancellation) else { return .accepted }
                 if result.state == .healthy || (result.code != .none && AutomaticRetryState.disposition(after: result.code) == .clear) {
-                    guard await setAutomaticRetryState(nil, definition: definition, token: token, automatic: false) else { return .accepted }
+                    switch await setAutomaticRetryState(nil, definition: definition, token: token, automatic: false) {
+                    case .committed:
+                        break
+                    case .superseded:
+                        operationCancellation?.observeSupersession()
+                        return .accepted
+                    case .failed(let detail):
+                        return .failure(.verificationFailed, "Recovery completed, but its retry state could not be persisted: \(detail)")
+                    }
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualWorkIsCurrent(token, definition: definition, observingSupersession: operationCancellation) else { return .accepted }
                 await record(status(definition, source: definition.source, state: result.state, code: result.code, detail: result.detail, at: Date(), recovered: result.didAttemptRecovery))
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
-                return result.state == .healthy ? .accepted : .failure(result.code, result.detail)
+                guard manualWorkIsCurrent(token, definition: definition, observingSupersession: operationCancellation) else { return .accepted }
+                return OperationLifecycle.recoveryResponse(
+                    state: result.state,
+                    code: result.code,
+                    detail: result.detail,
+                    interruption: operationCancellation?.observedInterruption ?? .none
+                )
             case .reveal:
                 let token = mountWork.beginManual(for: definition.id)
                 activeToken = token
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 guard try await mounts.currentSource(at: definition.mountPoint) == definition.source else {
                     return .failure(.sourceMismatch, "The configured source is not mounted at this location.")
                 }
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 let response = try await agent.request(.revealManagedMount(mountPoint: definition.mountPoint))
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 guard response == .succeeded else {
                     if case .failed(let detail) = response { return .failure(.verificationFailed, detail) }
                     return .failure(.verificationFailed, "The signed user agent could not reveal this mount.")
@@ -560,7 +629,12 @@ actor DaemonController {
             }
             return .accepted
         } catch {
-            if let activeToken, !manualWorkIsCurrent(activeToken, definition: definition) {
+            if let activeToken,
+               !manualOperationIsCurrent(
+                   activeToken,
+                   definition: definition,
+                   operationCancellation: operationCancellation
+               ) {
                 return .accepted
             }
             switch action {
@@ -570,22 +644,39 @@ actor DaemonController {
                 let retryDisposition = AutomaticRetryState.disposition(after: code)
                 if retryDisposition != .schedule {
                     if retryDisposition == .clear {
-                        guard await setAutomaticRetryState(nil, definition: definition, token: token, automatic: false) else { return .accepted }
+                        switch await setAutomaticRetryState(nil, definition: definition, token: token, automatic: false) {
+                        case .committed:
+                            break
+                        case .superseded:
+                            operationCancellation?.observeSupersession()
+                            return .accepted
+                        case .failed(let detail):
+                            return .failure(.verificationFailed, "Mount failed and its retry state could not be persisted: \(detail)")
+                        }
                     }
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     await record(status(definition, source: nil, state: .probeError, code: code, detail: "Mount failed: \(error.localizedDescription)", at: Date()))
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     return .failure(code, error.localizedDescription)
                 } else {
-                    guard let retry = await scheduleRetry(kind: .missingMount, definition: definition, token: token, automatic: false, at: Date()) else { return .accepted }
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    let retry: AutomaticRetryState
+                    switch await scheduleRetry(kind: .missingMount, definition: definition, token: token, automatic: false, at: Date()) {
+                    case .scheduled(let scheduled):
+                        retry = scheduled
+                    case .superseded:
+                        operationCancellation?.observeSupersession()
+                        return .accepted
+                    case .failed(let detail):
+                        return .failure(.verificationFailed, "Mount failed and its automatic retry could not be persisted: \(detail)")
+                    }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                     await record(status(definition, source: nil, state: .retryScheduled, code: .remountFailed, detail: "Mount failed: \(error.localizedDescription)", at: Date(), nextAutomaticAttempt: retry.nextAttempt))
-                    guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                    guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 }
             case .check:
-                guard let token = activeToken, manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard let token = activeToken, manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
                 await record(status(definition, source: nil, state: .probeError, code: .verificationFailed, detail: "Check failed: \(error.localizedDescription)", at: Date()))
-                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
+                guard manualOperationIsCurrent(token, definition: definition, operationCancellation: operationCancellation) else { return .accepted }
             case .unmount, .recover, .reveal:
                 break
             }

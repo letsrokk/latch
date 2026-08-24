@@ -20,10 +20,10 @@ public struct AgentConnectionAvailability: Sendable, Equatable {
 public enum AgentRequest: Codable, Sendable, Equatable {
     case probe(mountPoint: String, timeoutSeconds: Int)
     case prepare(MacApplicationDependency)
-    case isRunning(String)
+    case isRunning(MacApplicationDependency)
     case stop(MacApplicationDependency, timeoutSeconds: Int)
     case start(MacApplicationDependency)
-    case verifyRunning(String, timeoutSeconds: Int)
+    case verifyRunning(MacApplicationDependency, timeoutSeconds: Int)
     case dependencyPrepare(RecoveryDependency)
     case dependencyIsRunning(RecoveryDependency)
     case dependencyStop(RecoveryDependency, timeoutSeconds: Int)

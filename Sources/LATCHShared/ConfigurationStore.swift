@@ -321,6 +321,30 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
         try mutateState { $0.automaticRetries[mountID] = retry }
     }
 
+    /// Commits the pause flag and retry state as one generation-owned update.
+    /// If ownership changes during persistence, the previous in-memory state is
+    /// written back before another actor operation can observe the candidate.
+    @discardableResult
+    public func setMonitoringState(
+        paused: Bool,
+        automaticRetry: AutomaticRetryState?,
+        for mountID: UUID,
+        ifCurrent: @Sendable () -> Bool
+    ) throws -> Bool {
+        guard ifCurrent() else { return false }
+        var candidate = state
+        if paused { candidate.pausedMounts.insert(mountID) }
+        else { candidate.pausedMounts.remove(mountID) }
+        candidate.automaticRetries[mountID] = automaticRetry
+        try persist(candidate)
+        guard ifCurrent() else {
+            try persist(state)
+            return false
+        }
+        state = candidate
+        return true
+    }
+
     /// Commits retry state only while its owning mount generation is current.
     /// The second check removes a write if the generation changed during the
     /// atomic file replacement, before another state-store operation can run.

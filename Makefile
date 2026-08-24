@@ -11,11 +11,16 @@ SCHEME := LATCH
 DERIVED_DATA := $(CURDIR)/.build/xcode-derived-data
 XCODEBUILD := xcodebuild -project "$(PROJECT)" -scheme "$(SCHEME)" -derivedDataPath "$(DERIVED_DATA)"
 XCODE_CONFIG := $(if $(filter release,$(CONFIG)),Release,Debug)
+BUILD_DESTINATION := $(if $(filter release,$(CONFIG)),generic/platform=macOS,platform=macOS)
 BUILT_APP := $(DERIVED_DATA)/Build/Products/$(XCODE_CONFIG)/LATCH.app
 SCRIPT_TESTS := \
 	Tests/BuildScripts/atomic-app-replacement-test.sh \
+	Tests/BuildScripts/build-and-run-script-test.sh \
 	Tests/BuildScripts/stage-xcode-app-test.sh \
 	Tests/BuildScripts/package-dmg-script-test.sh \
+	Tests/BuildScripts/release-workflow-contract-test.sh \
+	Tests/BuildScripts/release-validator-test.sh \
+	Tests/BuildScripts/xcode-settings-contract-test.sh
 
 .PHONY: help validate-config script-tests test build app release dmg check notarize clean system-test
 
@@ -56,7 +61,7 @@ test: validate-config script-tests
 	fi
 
 build: validate-config
-	$(XCODEBUILD) -configuration "$(XCODE_CONFIG)" -destination 'platform=macOS' build
+	$(XCODEBUILD) -configuration "$(XCODE_CONFIG)" -destination '$(BUILD_DESTINATION)' build
 
 app: build
 	/bin/zsh ./scripts/stage-xcode-app.sh "$(BUILT_APP)" "$(OUTPUT)"
@@ -69,8 +74,10 @@ dmg:
 release:
 	@[[ -n "$(SIGNING_IDENTITY)" ]] || { print -u2 'SIGNING_IDENTITY is required.'; exit 64; }
 	@[[ -n "$(TEAM_ID)" ]] || { print -u2 'TEAM_ID is required.'; exit 64; }
-	$(XCODEBUILD) -configuration Release -destination 'platform=macOS' CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$(SIGNING_IDENTITY)" DEVELOPMENT_TEAM="$(TEAM_ID)" build
+	@[[ "$(SIGNING_IDENTITY)" == 'Developer ID Application:'* ]] || { print -u2 'SIGNING_IDENTITY must be a Developer ID Application identity.'; exit 64; }
+	$(XCODEBUILD) -configuration Release -destination 'generic/platform=macOS' CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$(SIGNING_IDENTITY)" DEVELOPMENT_TEAM="$(TEAM_ID)" build
 	/bin/zsh ./scripts/stage-xcode-app.sh "$(DERIVED_DATA)/Build/Products/Release/LATCH.app" "$(dir $(APP))"
+	./scripts/validate-release-app.sh "$(APP)" "$(TEAM_ID)"
 
 check: validate-config
 	./Tests/BuildScripts/xcode-settings-contract-test.sh

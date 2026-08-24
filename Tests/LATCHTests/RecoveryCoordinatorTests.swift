@@ -80,6 +80,19 @@ struct RecoveryCoordinatorTests {
         #expect(await mounts.operations.contains("unmount") == false)
     }
 
+    @Test func dependencyInspectionFailureAbortsBeforeUnmount() async {
+        let dependency = dependency(name: "radarr")
+        let mounts = FakeMountOperator()
+        let dependencies = FakeDependencyOperator(failInspect: dependency.id)
+        let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: dependencies, permissionGate: { true })
+
+        let result = await coordinator.recover(makeDefinition(dependencies: [dependency]), trigger: .manual)
+
+        #expect(result.code == .dependencyUnavailable)
+        #expect(await dependencies.operations == ["prepare:radarr", "inspect:radarr"])
+        #expect(await mounts.operations.contains("unmount") == false)
+    }
+
     @Test func sourceMismatchRefusesUnmount() async {
         let mounts = FakeMountOperator(source: "other:/wrong")
         let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: FakeDependencyOperator(), permissionGate: { true })
@@ -149,6 +162,57 @@ struct RecoveryCoordinatorTests {
 
         #expect(result.state == .stale)
         #expect(await dependencies.operations.suffix(2) == ["start:radarr", "verify:radarr"])
+        #expect(await mounts.operations.contains("unmount") == false)
+    }
+
+    @Test func stopFailureAfterRemoteSideEffectRestoresAndVerifiesTheUncertainDependency() async {
+        let dependency = dependency(name: "radarr")
+        let dependencies = FakeDependencyOperator(
+            running: [dependency.id],
+            failStopAfterSideEffect: dependency.id
+        )
+        let mounts = FakeMountOperator()
+        let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: dependencies, permissionGate: { true })
+
+        let result = await coordinator.recover(makeDefinition(dependencies: [dependency]), trigger: .manual)
+
+        #expect(result.state == .stale)
+        #expect(result.code == .dependencyStopFailed)
+        #expect(await dependencies.operations == [
+            "prepare:radarr", "inspect:radarr", "stop:radarr", "inspect:radarr", "start:radarr", "verify:radarr",
+        ])
+        #expect(await dependencies.running == Set([dependency.id]))
+        #expect(await mounts.operations.contains("unmount") == false)
+    }
+
+    @Test func cancellationDuringUncertainStopRestorationPublishesCancelledAfterSafeCleanup() async {
+        let dependency = dependency(name: "radarr")
+        let cancellation = TestCancellation()
+        let restoreGate = TestOperationGate()
+        let dependencies = FakeDependencyOperator(
+            running: [dependency.id],
+            failStopAfterSideEffect: dependency.id,
+            startGate: restoreGate
+        )
+        let mounts = FakeMountOperator()
+        let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: dependencies, permissionGate: { true })
+        let recovery = Task {
+            await coordinator.recover(
+                makeDefinition(dependencies: [dependency]),
+                trigger: .manual,
+                isCancelled: { cancellation.isCancelled }
+            )
+        }
+        await restoreGate.waitUntilEntered()
+
+        cancellation.cancel()
+        await restoreGate.release()
+        let result = await recovery.value
+
+        #expect(result.state == .stale)
+        #expect(result.code == .verificationFailed)
+        #expect(result.detail.contains("canceled"))
+        #expect(await dependencies.running == Set([dependency.id]))
         #expect(await mounts.operations.contains("unmount") == false)
     }
 
@@ -382,7 +446,7 @@ struct RecoveryCoordinatorTests {
         )
 
         #expect(result.state == .stale)
-        #expect(await dependencies.operations == ["prepare:radarr", "inspect:radarr"])
+        #expect(await dependencies.operations == ["prepare:radarr", "inspect:radarr", "inspect:radarr"])
         #expect(await dependencies.running == Set([dependency.id]))
         #expect(await mounts.operations.contains("unmount") == false)
     }
@@ -556,6 +620,8 @@ private actor FakeDependencyOperator: DependencyOperating {
     var operations: [String] = []
     var running: Set<UUID>
     let failStop: UUID?
+    let failStopAfterSideEffect: UUID?
+    let failInspect: UUID?
     let failVerify: UUID?
     let failPrepare: UUID?
     let cancelAfterOperation: String?
@@ -567,6 +633,8 @@ private actor FakeDependencyOperator: DependencyOperating {
     init(
         running: Set<UUID> = [],
         failStop: UUID? = nil,
+        failStopAfterSideEffect: UUID? = nil,
+        failInspect: UUID? = nil,
         failVerify: UUID? = nil,
         failPrepare: UUID? = nil,
         cancelAfterOperation: String? = nil,
@@ -577,6 +645,8 @@ private actor FakeDependencyOperator: DependencyOperating {
     ) {
         self.running = running
         self.failStop = failStop
+        self.failStopAfterSideEffect = failStopAfterSideEffect
+        self.failInspect = failInspect
         self.failVerify = failVerify
         self.failPrepare = failPrepare
         self.cancelAfterOperation = cancelAfterOperation
@@ -594,6 +664,7 @@ private actor FakeDependencyOperator: DependencyOperating {
     func isRunning(_ dependency: RecoveryDependency) async throws -> Bool {
         let operation = "inspect:\(dependency.nameForTesting)"
         operations.append(operation)
+        if dependency.id == failInspect { throw FakeFailure.expected }
         let result = running.contains(dependency.id)
         cancelIfRequested(after: operation)
         return result
@@ -605,6 +676,7 @@ private actor FakeDependencyOperator: DependencyOperating {
         operations.append(operation)
         if dependency.id == failStop { throw FakeFailure.expected }
         running.remove(dependency.id)
+        if dependency.id == failStopAfterSideEffect { throw FakeFailure.expected }
         cancelIfRequested(after: operation)
         if let stopGate { await stopGate.enterAndWait() }
     }

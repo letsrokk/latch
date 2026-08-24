@@ -51,7 +51,7 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
             try await executeDependency(dependency, operation: .prepare)
             return .ready
         case .dependencyIsRunning(let dependency):
-            return .running(await isDependencyRunning(dependency))
+            return .running(try await isDependencyRunning(dependency))
         case .dependencyStop(let dependency, let timeout):
             try await stopDependency(dependency, timeout: timeout)
             return .succeeded
@@ -59,25 +59,25 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
             try await startDependency(dependency)
             return .succeeded
         case .dependencyVerifyRunning(let dependency, let timeout):
-            if await isDependencyRunning(dependency, timeout: timeout) {
+            if try await isDependencyRunning(dependency, timeout: timeout) {
                 return .succeeded
             }
             return .failed("The dependency did not report as running.")
         case .prepare(let app):
             _ = try resolveAndValidate(app)
             return .ready
-        case .isRunning(let identifier):
-            return .running(runningApplication(identifier) != nil)
+        case .isRunning(let app):
+            let applicationURL = try resolveAndValidate(app)
+            return .running(runningApplication(app.bundleIdentifier, matching: applicationURL) != nil)
         case .stop(let app, let timeout):
             let relaunchURL = try resolveAndValidate(app)
-            guard let running = runningApplication(app.bundleIdentifier) else { return .succeeded }
-            _ = running.terminate()
-            if await waitUntil(timeout: timeout, condition: { self.runningApplication(app.bundleIdentifier) == nil }) { return .succeeded }
-            guard app.forceQuitAfterTimeout, try resolveAndValidate(app) == relaunchURL else {
-                throw ApplicationCoordinatorError.cannotStopSafely
-            }
-            _ = running.forceTerminate()
-            guard await waitUntil(timeout: 5, condition: { self.runningApplication(app.bundleIdentifier) == nil }) else {
+            guard let running = runningApplication(app.bundleIdentifier, matching: relaunchURL) else { return .succeeded }
+            guard await stopApplication(
+                running,
+                applicationURL: relaunchURL,
+                timeout: timeout,
+                allowForceQuit: app.forceQuitAfterTimeout
+            ) else {
                 throw ApplicationCoordinatorError.cannotStopSafely
             }
             return .succeeded
@@ -87,8 +87,12 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
             configuration.activates = false
             _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
             return .succeeded
-        case .verifyRunning(let identifier, let timeout):
-            guard await waitUntil(timeout: timeout, condition: { self.runningApplication(identifier) != nil }) else {
+        case .verifyRunning(let app, let timeout):
+            let applicationURL = try resolveAndValidate(app)
+            let isRunning = await waitUntil(timeout: timeout, condition: {
+                self.runningApplication(app.bundleIdentifier, matching: applicationURL) != nil
+            })
+            guard ApplicationTerminationPolicy.restartVerified(isRunning: isRunning) else {
                 throw ApplicationCoordinatorError.restartFailed
             }
             return .succeeded
@@ -155,18 +159,19 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
                     timeout: 30
                 )
             case .isRunning:
-                _ = await isDependencyRunning(.init(id: dependency.id, enabled: dependency.enabled, stopTimeoutSeconds: dependency.stopTimeoutSeconds, kind: dependency.kind), timeout: 10)
+                _ = try await isDependencyRunning(.init(id: dependency.id, enabled: dependency.enabled, stopTimeoutSeconds: dependency.stopTimeoutSeconds, kind: dependency.kind), timeout: 10)
             }
         }
     }
 
     @MainActor
-    private func isDependencyRunning(_ dependency: RecoveryDependency, timeout: Int = 10) async -> Bool {
+    private func isDependencyRunning(_ dependency: RecoveryDependency, timeout: Int = 10) async throws -> Bool {
         switch dependency.kind {
         case .macApplication(let app):
-            return runningApplication(app.bundleIdentifier) != nil
+            let applicationURL = try resolveAndValidate(app)
+            return runningApplication(app.bundleIdentifier, matching: applicationURL) != nil
         case .dockerContainer(let docker):
-            return (try? await isDockerContainerRunning(docker: docker, timeout: timeout)) ?? false
+            return try await isDockerContainerRunning(docker: docker, timeout: timeout)
         }
     }
 
@@ -188,8 +193,8 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
         case .isRunning:
             break
         case .stop(let timeout):
-            guard let running = runningApplication(app.bundleIdentifier) else { return }
             let applicationURL = try resolveAndValidate(app)
+            guard let running = runningApplication(app.bundleIdentifier, matching: applicationURL) else { return }
             guard await stopApplication(
                 running,
                 applicationURL: applicationURL,
@@ -207,7 +212,12 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
                 configuration: configuration
             )
         case .verify:
-            if runningApplication(app.bundleIdentifier) == nil { throw ApplicationCoordinatorError.restartFailed }
+            let applicationURL = try resolveAndValidate(app)
+            if !ApplicationTerminationPolicy.restartVerified(
+                isRunning: runningApplication(app.bundleIdentifier, matching: applicationURL) != nil
+            ) {
+                throw ApplicationCoordinatorError.restartFailed
+            }
         }
     }
 
@@ -220,42 +230,60 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
     ) async -> Bool {
         guard let bundleIdentifier = application.bundleIdentifier else { return false }
         _ = application.terminate()
-        if await waitForExit(bundleIdentifier, timeout: max(1, timeout)) {
+        if await waitForExit(bundleIdentifier, applicationURL: applicationURL, timeout: max(1, timeout)) {
             return true
         }
-        let configuredBundleURL = applicationURL.standardizedFileURL.resolvingSymlinksInPath()
-        let runningBundleURL = application.bundleURL?.standardizedFileURL.resolvingSymlinksInPath()
-        guard allowForceQuit, configuredBundleURL == runningBundleURL else {
+        switch ApplicationTerminationPolicy.disposition(
+            exitedGracefully: false,
+            allowForceQuit: allowForceQuit,
+            configuredURL: applicationURL,
+            runningURL: application.bundleURL
+        ) {
+        case .succeeded:
+            return true
+        case .failed:
             return false
+        case .forceQuit:
+            break
         }
         guard application.forceTerminate() else { return false }
-        return await waitForExit(bundleIdentifier, timeout: 5)
+        return await waitForExit(bundleIdentifier, applicationURL: applicationURL, timeout: 5)
     }
 
     @MainActor
-    private func waitForExit(_ bundleIdentifier: String, timeout: Int) async -> Bool {
+    private func waitForExit(_ bundleIdentifier: String, applicationURL: URL, timeout: Int) async -> Bool {
         guard timeout > 0 else { return false }
-        return await waitUntil(timeout: timeout) { [self] in runningApplication(bundleIdentifier) == nil }
+        return await waitUntil(timeout: timeout) { [self] in
+            runningApplication(bundleIdentifier, matching: applicationURL) == nil
+        }
     }
 
     @MainActor
     private func isDockerContainerRunning(docker: DockerContainerDependency, timeout: Int) async throws -> Bool {
         let output = try await executeDockerCommand(.init(docker: docker, command: ["inspect", "--format", "{{.State.Running}}", docker.containerName]), timeout: timeout)
-        return output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+        return try DockerInspectionPolicy.runningState(from: output)
     }
 
     @MainActor
     private func executeDockerCommand(_ request: DockerCommandRequest, timeout: Int) async throws -> String {
         let executable = try dockerExecutablePath()
         let environment = dockerEnvironment(docker: request.docker)
-        return try await Task.detached(priority: .userInitiated) {
-            try DockerCommandRunner.run(
+        do {
+            let result = try await BoundedProcessRunner.run(
                 executable: executable,
                 arguments: request.command,
                 environment: environment,
-                timeout: timeout
+                timeout: .seconds(timeout)
             )
-        }.value
+            guard result.terminationStatus == 0 else {
+                throw ApplicationCoordinatorError.dockerUnavailable(
+                    result.standardError.isEmpty ? "The Docker command failed." : result.standardError
+                )
+            }
+            return result.standardOutput
+        } catch BoundedProcessError.timedOut {
+            throw ApplicationCoordinatorError.dockerUnavailable("The Docker command timed out.")
+        }
     }
 
     @MainActor
@@ -288,53 +316,6 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
         let command: [String]
     }
 
-    private enum DockerCommandRunner {
-        private final class OutputBuffer: @unchecked Sendable {
-            private let lock = NSLock()
-            private var data = Data()
-
-            func append(_ value: Data) { lock.withLock { data.append(value) } }
-            var snapshot: Data { lock.withLock { data } }
-        }
-
-        static func run(executable: String, arguments: [String], environment: [String: String], timeout: Int) throws -> String {
-            let process = Process()
-            let pipe = Pipe()
-            let errorPipe = Pipe()
-            let outputData = OutputBuffer()
-            let errorData = OutputBuffer()
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty else { return }
-                outputData.append(data)
-            }
-            errorPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty else { return }
-                errorData.append(data)
-            }
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.environment = environment
-            process.standardOutput = pipe
-            process.standardError = errorPipe
-            try process.run()
-            let deadline = Date().addingTimeInterval(Double(timeout))
-            while process.isRunning && Date() < deadline { usleep(25_000) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            process.waitUntilExit()
-            pipe.fileHandleForReading.readabilityHandler = nil
-            errorPipe.fileHandleForReading.readabilityHandler = nil
-            outputData.append(pipe.fileHandleForReading.readDataToEndOfFile())
-            errorData.append(errorPipe.fileHandleForReading.readDataToEndOfFile())
-            let detail = String(decoding: errorData.snapshot, as: UTF8.self)
-            guard process.terminationStatus == 0 else {
-                throw ApplicationCoordinatorError.dockerUnavailable(detail.isEmpty ? "The Docker command failed." : detail)
-            }
-            return String(decoding: outputData.snapshot, as: UTF8.self)
-        }
-    }
-
     @MainActor
     private func resolveAndValidate(_ app: MacApplicationDependency) throws -> URL {
         let resolved = app.applicationURL.map { URL(fileURLWithPath: $0) }
@@ -347,8 +328,10 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
     }
 
     @MainActor
-    private func runningApplication(_ identifier: String) -> NSRunningApplication? {
-        NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first
+    private func runningApplication(_ identifier: String, matching applicationURL: URL) -> NSRunningApplication? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first {
+            ApplicationTerminationPolicy.matches(configuredURL: applicationURL, runningURL: $0.bundleURL)
+        }
     }
 
     @MainActor

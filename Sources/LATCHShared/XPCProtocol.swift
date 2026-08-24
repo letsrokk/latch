@@ -68,6 +68,7 @@ public enum LATCHRequest: Codable, Sendable, Equatable {
     case removeDefinition(UUID, confirmMounted: Bool)
     case setEnabled(UUID, Bool)
     case perform(UUID, LATCHAction, confirmed: Bool)
+    case getOperations
     case getOperation(UUID)
     case cancelOperation(UUID)
     case getRecentEvents(limit: Int)
@@ -90,6 +91,7 @@ public enum LATCHResponse: Codable, Sendable, Equatable {
     case discoveredServers([DiscoveredNFSServer])
     case accepted
     case operationAccepted(OperationReceipt)
+    case operationSnapshots([OperationSnapshot])
     case operationSnapshot(OperationSnapshot)
     case failure(LATCHErrorCode, String)
 }

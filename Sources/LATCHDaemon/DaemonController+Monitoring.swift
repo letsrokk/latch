@@ -102,9 +102,15 @@ extension DaemonController {
                     return
                 } else if transition == .scheduleMissingMountRetry {
                     guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-                    guard let retry = await scheduleRetry(kind: .missingMount, definition: definition, token: token, automatic: true, at: Date()) else { return }
-                    guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-                    await record(status(definition, source: nil, state: .retryScheduled, code: .networkUnavailable, detail: "The NFS service did not respond after Wake-on-LAN.", at: Date(), nextAutomaticAttempt: retry.nextAttempt))
+                    switch await scheduleRetry(kind: .missingMount, definition: definition, token: token, automatic: true, at: Date()) {
+                    case .scheduled(let retry):
+                        guard await automaticWorkIsCurrent(token, definition: definition) else { return }
+                        await record(status(definition, source: nil, state: .retryScheduled, code: .networkUnavailable, detail: "The NFS service did not respond after Wake-on-LAN.", at: Date(), nextAutomaticAttempt: retry.nextAttempt))
+                    case .superseded:
+                        return
+                    case .failed(let persistenceDetail):
+                        await record(status(definition, source: nil, state: .networkUnavailable, code: .networkUnavailable, detail: "The NFS service did not respond after Wake-on-LAN. Automatic retry could not be persisted: \(persistenceDetail)", at: Date()))
+                    }
                     return
                 }
             }
@@ -135,8 +141,14 @@ extension DaemonController {
         }
         guard source == definition.source else {
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-            guard await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) else { return }
-            await record(status(definition, source: source, state: .probeError, code: .sourceMismatch, detail: "A different source owns the configured mountpoint.", at: date))
+            switch await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) {
+            case .committed:
+                await record(status(definition, source: source, state: .probeError, code: .sourceMismatch, detail: "A different source owns the configured mountpoint.", at: date))
+            case .superseded:
+                return
+            case .failed(let persistenceDetail):
+                await record(status(definition, source: source, state: .probeError, code: .sourceMismatch, detail: "A different source owns the configured mountpoint. Automatic retry state could not be cleared: \(persistenceDetail)", at: date))
+            }
             return
         }
         guard await automaticWorkIsCurrent(token, definition: definition) else { return }
@@ -157,7 +169,15 @@ extension DaemonController {
         guard await automaticWorkIsCurrent(token, definition: definition) else { return }
         if decision.status.state == .healthy {
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-            guard await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) else { return }
+            switch await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) {
+            case .committed:
+                break
+            case .superseded:
+                return
+            case .failed(let persistenceDetail):
+                await record(status(definition, source: source, state: decision.status.state, code: decision.status.errorCode, detail: "\(decision.status.detail) Automatic retry state could not be cleared: \(persistenceDetail)", at: date))
+                return
+            }
             await executePostMountActions(definition, token: token, automatic: true, createIfNeeded: false)
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
         }
@@ -179,13 +199,25 @@ extension DaemonController {
         }
         let retryDisposition = AutomaticRetryState.recoveryDisposition(state: result.state, code: result.code)
         if retryDisposition == .clear {
-            guard await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) else { return }
-            await record(status(definition, source: definition.source, state: result.state, code: result.code, detail: result.detail, at: Date(), recovered: result.didAttemptRecovery))
+            switch await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) {
+            case .committed:
+                await record(status(definition, source: definition.source, state: result.state, code: result.code, detail: result.detail, at: Date(), recovered: result.didAttemptRecovery))
+            case .superseded:
+                return
+            case .failed(let persistenceDetail):
+                await record(status(definition, source: definition.source, state: result.state, code: result.code, detail: "\(result.detail) Automatic retry state could not be cleared: \(persistenceDetail)", at: Date(), recovered: result.didAttemptRecovery))
+            }
         } else if retryDisposition == .schedule {
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-            guard let retry = await scheduleRetry(kind: .staleRecovery, definition: definition, token: token, automatic: true, at: date) else { return }
-            guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-            await record(status(definition, source: definition.source, state: .retryScheduled, code: result.code, detail: result.detail, at: Date(), recovered: result.didAttemptRecovery, nextAutomaticAttempt: retry.nextAttempt))
+            switch await scheduleRetry(kind: .staleRecovery, definition: definition, token: token, automatic: true, at: date) {
+            case .scheduled(let retry):
+                guard await automaticWorkIsCurrent(token, definition: definition) else { return }
+                await record(status(definition, source: definition.source, state: .retryScheduled, code: result.code, detail: result.detail, at: Date(), recovered: result.didAttemptRecovery, nextAutomaticAttempt: retry.nextAttempt))
+            case .superseded:
+                return
+            case .failed(let persistenceDetail):
+                await record(status(definition, source: definition.source, state: result.state, code: result.code, detail: "\(result.detail) Automatic retry could not be persisted: \(persistenceDetail)", at: Date(), recovered: result.didAttemptRecovery))
+            }
         } else {
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
             await record(status(definition, source: definition.source, state: result.state, code: result.code, detail: result.detail, at: Date(), recovered: result.didAttemptRecovery))
@@ -200,7 +232,17 @@ extension DaemonController {
             try ConfigurationValidator().validate(configuration, liveMounts: try externalMounts())
             try await mountExecutor.mount(definition, cancellation: mountCancellation(for: token))
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-            guard await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) else { return }
+            switch await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) {
+            case .committed:
+                break
+            case .superseded:
+                return
+            case .failed(let persistenceDetail):
+                await didMount(definition, previousSource: nil, token: token, automatic: true)
+                guard await automaticWorkIsCurrent(token, definition: definition) else { return }
+                await record(status(definition, source: definition.source, state: .mounting, code: .verificationFailed, detail: "Mounted, but automatic retry state could not be cleared: \(persistenceDetail)", at: Date()))
+                return
+            }
             await didMount(definition, previousSource: nil, token: token, automatic: true)
             guard await automaticWorkIsCurrent(token, definition: definition) else { return }
         } catch {
@@ -210,15 +252,29 @@ extension DaemonController {
             let retryDisposition = AutomaticRetryState.disposition(after: code)
             if retryDisposition != .schedule {
                 if retryDisposition == .clear {
-                    guard await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) else { return }
+                    switch await setAutomaticRetryState(nil, definition: definition, token: token, automatic: true) {
+                    case .committed:
+                        break
+                    case .superseded:
+                        return
+                    case .failed(let persistenceDetail):
+                        await record(status(definition, source: nil, state: .probeError, code: code, detail: "Automatic mount failed: \(error.localizedDescription). Automatic retry state could not be cleared: \(persistenceDetail)", at: Date()))
+                        return
+                    }
                 }
                 guard await automaticWorkIsCurrent(token, definition: definition) else { return }
                 await record(status(definition, source: nil, state: .probeError, code: code, detail: "Automatic mount failed: \(error.localizedDescription)", at: Date()))
             } else {
                 guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-                guard let retry = await scheduleRetry(kind: .missingMount, definition: definition, token: token, automatic: true, at: date) else { return }
-                guard await automaticWorkIsCurrent(token, definition: definition) else { return }
-                await record(status(definition, source: nil, state: .retryScheduled, code: .remountFailed, detail: "Automatic mount failed: \(error.localizedDescription)", at: Date(), nextAutomaticAttempt: retry.nextAttempt))
+                switch await scheduleRetry(kind: .missingMount, definition: definition, token: token, automatic: true, at: date) {
+                case .scheduled(let retry):
+                    guard await automaticWorkIsCurrent(token, definition: definition) else { return }
+                    await record(status(definition, source: nil, state: .retryScheduled, code: .remountFailed, detail: "Automatic mount failed: \(error.localizedDescription)", at: Date(), nextAutomaticAttempt: retry.nextAttempt))
+                case .superseded:
+                    return
+                case .failed(let persistenceDetail):
+                    await record(status(definition, source: nil, state: .probeError, code: .remountFailed, detail: "Automatic mount failed: \(error.localizedDescription). Automatic retry could not be persisted: \(persistenceDetail)", at: Date()))
+                }
             }
         }
     }

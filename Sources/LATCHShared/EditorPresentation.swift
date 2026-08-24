@@ -250,9 +250,11 @@ public enum ManagedMountMenuPresentation {
     public static func isEnabled(
         _ action: ManagedMountMenuAction,
         monitoringEnabled: Bool,
-        canReveal: Bool
+        canReveal: Bool,
+        operationActive: Bool = false
     ) -> Bool {
-        switch action {
+        guard !operationActive else { return false }
+        return switch action {
         case .reveal: canReveal
         case .check: monitoringEnabled
         case .mount, .editConfiguration, .unmount, .recover, .removeDefinition: true
@@ -413,18 +415,41 @@ public enum ResponseDeadlineError: Error, Sendable, Equatable, LocalizedError {
 }
 
 public enum ResponseDeadline {
+    public enum CancellationBehavior: Sendable {
+        case cancelWait
+        case awaitResponse
+    }
+
     public static func wait<Value: Sendable>(
         for timeout: Duration,
+        cancellationBehavior: CancellationBehavior = .cancelWait,
         onTimeout: @escaping @Sendable () -> Void = {},
         start: @escaping @Sendable (@escaping @Sendable (Result<Value, any Error>) -> Void) -> Void
     ) async throws -> Value {
-        try await withCheckedThrowingContinuation { continuation in
-            let gate = ResponseContinuationGate(continuation)
-            start { result in gate.resume(with: result) }
-            Task {
-                try? await Task.sleep(for: timeout)
-                gate.resume(with: .failure(ResponseDeadlineError.timedOut), beforeResume: onTimeout)
+        let gate = ResponseContinuationGate<Value>()
+        if cancellationBehavior == .awaitResponse {
+            return try await withCheckedThrowingContinuation { continuation in
+                guard gate.install(continuation, onCancellation: {}) else { return }
+                start { result in gate.resume(with: result) }
+                let deadlineTask = Task.detached {
+                    try? await Task.sleep(for: timeout)
+                    gate.resume(with: .failure(ResponseDeadlineError.timedOut), beforeResume: onTimeout)
+                }
+                gate.setDeadlineTask(deadlineTask)
             }
+        }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard gate.install(continuation, onCancellation: onTimeout) else { return }
+                start { result in gate.resume(with: result) }
+                let deadlineTask = Task {
+                    try? await Task.sleep(for: timeout)
+                    gate.resume(with: .failure(ResponseDeadlineError.timedOut), beforeResume: onTimeout)
+                }
+                gate.setDeadlineTask(deadlineTask)
+            }
+        } onCancel: {
+            gate.cancel(beforeResume: onTimeout)
         }
     }
 }
@@ -432,18 +457,60 @@ public enum ResponseDeadline {
 private final class ResponseContinuationGate<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Value, any Error>?
+    private var cancellationRequested = false
+    private var deadlineTask: Task<Void, Never>?
 
-    init(_ continuation: CheckedContinuation<Value, any Error>) {
-        self.continuation = continuation
+    func install(
+        _ continuation: CheckedContinuation<Value, any Error>,
+        onCancellation: () -> Void
+    ) -> Bool {
+        let shouldCancel = lock.withLock { () -> Bool in
+            if cancellationRequested { return true }
+            self.continuation = continuation
+            return false
+        }
+        if shouldCancel {
+            onCancellation()
+            continuation.resume(throwing: CancellationError())
+        }
+        return !shouldCancel
+    }
+
+    func setDeadlineTask(_ task: Task<Void, Never>) {
+        let shouldCancel = lock.withLock { () -> Bool in
+            guard continuation != nil else { return true }
+            deadlineTask = task
+            return false
+        }
+        if shouldCancel { task.cancel() }
+    }
+
+    func cancel(beforeResume: () -> Void) {
+        let pending = lock.withLock { () -> (CheckedContinuation<Value, any Error>, Task<Void, Never>?)? in
+            cancellationRequested = true
+            guard let continuation else { return nil }
+            let result = (continuation, deadlineTask)
+            self.continuation = nil
+            deadlineTask = nil
+            return result
+        }
+        guard let pending else { return }
+        pending.1?.cancel()
+        beforeResume()
+        pending.0.resume(throwing: CancellationError())
     }
 
     func resume(with result: Result<Value, any Error>, beforeResume: () -> Void = {}) {
-        let pending = lock.withLock { () -> CheckedContinuation<Value, any Error>? in
-            defer { continuation = nil }
-            return continuation
+        let pending = lock.withLock { () -> (CheckedContinuation<Value, any Error>, Task<Void, Never>?)? in
+            guard let continuation else { return nil }
+            let pending = (continuation, deadlineTask)
+            self.continuation = nil
+            deadlineTask = nil
+            return pending
         }
         guard let pending else { return }
+        pending.1?.cancel()
         beforeResume()
-        pending.resume(with: result)
+        pending.0.resume(with: result)
     }
 }

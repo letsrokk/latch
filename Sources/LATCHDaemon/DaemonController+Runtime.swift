@@ -1,6 +1,18 @@
 import Foundation
 import LATCHShared
 
+enum AutomaticRetryPersistenceResult: Sendable, Equatable {
+    case committed
+    case superseded
+    case failed(String)
+}
+
+enum AutomaticRetryScheduleResult: Sendable, Equatable {
+    case scheduled(AutomaticRetryState)
+    case superseded
+    case failed(String)
+}
+
 extension DaemonController {
     func annotatePermission(_ result: ProbeResult) -> ProbeResult {
         result.annotatingNetworkVolumesDenial(permissionVerified: networkVolumesVerification.isVerified)
@@ -192,18 +204,21 @@ extension DaemonController {
         token: MountWorkToken,
         automatic: Bool,
         at date: Date
-    ) async -> AutomaticRetryState? {
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return nil }
+    ) async -> AutomaticRetryScheduleResult {
+        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return .superseded }
         let previous = await stateStore.automaticRetryState(for: definition.id)
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return nil }
+        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return .superseded }
         let failures = previous?.kind == kind ? (previous?.failures ?? 0) + 1 : 0
         let interval: TimeInterval = switch kind {
         case .missingMount: AutomaticRetryState.missingMountInterval(afterFailures: failures)
         case .staleRecovery: AutomaticRetryState.staleInterval(recoveryCooldownSeconds: definition.recoveryCooldownSeconds, afterFailures: failures)
         }
         let retry = AutomaticRetryState(kind: kind, failures: failures, nextAttempt: date.addingTimeInterval(interval))
-        guard await setAutomaticRetryState(retry, definition: definition, token: token, automatic: automatic) else { return nil }
-        return retry
+        switch await setAutomaticRetryState(retry, definition: definition, token: token, automatic: automatic) {
+        case .committed: return .scheduled(retry)
+        case .superseded: return .superseded
+        case .failed(let detail): return .failed(detail)
+        }
     }
 
     func setAutomaticRetryState(
@@ -211,8 +226,8 @@ extension DaemonController {
         definition: MountDefinition,
         token: MountWorkToken,
         automatic: Bool
-    ) async -> Bool {
-        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return false }
+    ) async -> AutomaticRetryPersistenceResult {
+        guard await mountWorkIsCurrent(token, definition: definition, automatic: automatic) else { return .superseded }
         let committed: Bool
         do {
             committed = try await stateStore.setAutomaticRetryState(
@@ -222,10 +237,10 @@ extension DaemonController {
             )
         } catch {
             persistenceLogger.notice("Unable to persist automatic retry state for \(definition.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            return false
+            return .failed(error.localizedDescription)
         }
-        guard committed else { return false }
-        return await mountWorkIsCurrent(token, definition: definition, automatic: automatic)
+        guard committed else { return .superseded }
+        return await mountWorkIsCurrent(token, definition: definition, automatic: automatic) ? .committed : .superseded
     }
 
     func mountCancellation(
@@ -287,6 +302,27 @@ extension DaemonController {
             return false
         }
         return true
+    }
+
+    func manualWorkIsCurrent(
+        _ token: MountWorkToken,
+        definition: MountDefinition,
+        observingSupersession operationCancellation: OperationCancellationToken?
+    ) -> Bool {
+        let isCurrent = manualWorkIsCurrent(token, definition: definition)
+        if !isCurrent { operationCancellation?.observeSupersession() }
+        return isCurrent
+    }
+
+    func manualOperationIsCurrent(
+        _ token: MountWorkToken,
+        definition: MountDefinition,
+        operationCancellation: OperationCancellationToken?
+    ) -> Bool {
+        if operationCancellation?.observeCancellation() == true { return false }
+        let isCurrent = manualWorkIsCurrent(token, definition: definition)
+        if !isCurrent { operationCancellation?.observeSupersession() }
+        return isCurrent
     }
 
     func record(_ status: MountStatus) async {

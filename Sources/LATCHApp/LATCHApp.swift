@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import LATCHShared
 
 @main
 struct LATCHApp: App {
@@ -53,5 +54,46 @@ struct LATCHApp: App {
         }
         .defaultSize(width: 1040, height: 680)
         .defaultLaunchBehavior(opensMainWindow ? .presented : .suppressed)
+        .commands {
+            LATCHCommands(model: model)
+        }
+
+        Settings {
+            LATCHPreferencesView()
+                .environmentObject(model)
+                .onAppear { model.start() }
+        }
+    }
+}
+
+private struct LATCHCommands: Commands {
+    @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandMenu("Navigate") {
+            navigationButton("Overview", destination: .overview, key: "1")
+            navigationButton("Managed Mounts", destination: .managed, key: "2")
+            navigationButton("Servers", destination: .servers, key: "3")
+            navigationButton("External Mounts", destination: .external, key: "4")
+            navigationButton("Activity", destination: .activity, key: "5")
+        }
+        CommandGroup(after: .toolbar) {
+            Button("Refresh Status") { Task { await model.refresh() } }
+                .keyboardShortcut("r", modifiers: .command)
+        }
+    }
+
+    private func navigationButton(
+        _ title: String,
+        destination: LATCHMainDestination,
+        key: KeyEquivalent
+    ) -> some View {
+        Button(title) {
+            model.mainDestination = destination
+            openWindow(id: "latch-main")
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+        .keyboardShortcut(key, modifiers: .command)
     }
 }

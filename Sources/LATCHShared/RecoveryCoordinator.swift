@@ -155,24 +155,19 @@ public actor RecoveryCoordinator {
         }
 
         var stopped: [RecoveryDependency] = []
-        do {
-            for dependency in running {
-                if isCancelled() { return await cancellationResult(stopped: stopped, mountState: .untouched) }
+        for dependency in running {
+            if isCancelled() { return await cancellationResult(stopped: stopped, mountState: .untouched) }
+            do {
                 try await dependencies.stop(dependency, cancellation: cancellation)
                 stopped.append(dependency)
                 if isCancelled() { return await cancellationResult(stopped: stopped, mountState: .untouched) }
+            } catch {
+                return await resultAfterUncertainStopFailure(
+                    dependency,
+                    previouslyStopped: stopped,
+                    isCancelled: isCancelled
+                )
             }
-        } catch {
-            if isCancelled() { return await cancellationResult(stopped: stopped, mountState: .untouched) }
-            switch await restartAndVerify(stopped, cancellation: cancellation) {
-            case .success:
-                break
-            case .failed:
-                return .init(state: .failedClosed, code: .dependencyStopFailed, detail: "Dependency stop failed and an earlier dependency could not be restored.", didAttemptRecovery: false)
-            case .cancelled:
-                return await cancellationResult(stopped: stopped, mountState: .untouched)
-            }
-            return .init(state: .stale, code: .dependencyStopFailed, detail: "A dependency could not be stopped; the mount was not changed.", didAttemptRecovery: false)
         }
 
         if isCancelled() { return await cancellationResult(stopped: stopped, mountState: .untouched) }
@@ -279,6 +274,44 @@ public actor RecoveryCoordinator {
             return .cancelled
         }
         return .success
+    }
+
+    private func resultAfterUncertainStopFailure(
+        _ dependency: RecoveryDependency,
+        previouslyStopped: [RecoveryDependency],
+        isCancelled: @escaping @Sendable () -> Bool
+    ) async -> RecoveryResult {
+        var dependenciesToRestore = previouslyStopped
+        do {
+            let isRunning = try await dependencies.isRunning(dependency)
+            if !isRunning {
+                dependenciesToRestore.append(dependency)
+            }
+        } catch {
+            // The stop outcome is unknown. Starting is intentionally treated as an
+            // idempotent restore attempt; verification is the authoritative result.
+            dependenciesToRestore.append(dependency)
+        }
+
+        switch await restartAndVerify(dependenciesToRestore, cancellation: .never) {
+        case .success:
+            if isCancelled() {
+                return await cancellationResult(stopped: [], mountState: .untouched)
+            }
+            return .init(
+                state: .stale,
+                code: .dependencyStopFailed,
+                detail: "A dependency stop did not complete cleanly; every possibly stopped dependency was restored and verified, and the mount was not changed.",
+                didAttemptRecovery: false
+            )
+        case .failed, .cancelled:
+            return .init(
+                state: .failedClosed,
+                code: .dependencyStopFailed,
+                detail: "A dependency stop had an uncertain outcome and safe restoration could not be verified.",
+                didAttemptRecovery: false
+            )
+        }
     }
 
     private func stopAndVerify(_ dependenciesToStop: [RecoveryDependency]) async -> Bool {

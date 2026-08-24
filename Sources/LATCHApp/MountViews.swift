@@ -61,7 +61,10 @@ struct LATCHMenu: View {
                             definition: definition,
                             status: model.statuses.first { $0.definitionID == definition.id },
                             expectedSource: model.configuration.resolve(definition)?.source,
-                            operation: model.operationSnapshots.values.first { $0.mountID == definition.id },
+                            operation: OperationMonitoringPolicy.activeSnapshot(
+                                for: definition.id,
+                                in: model.operationSnapshots.values
+                            ),
                             request: request,
                             cancel: { operationID in Task { await model.cancelOperation(operationID) } }
                         )
@@ -74,7 +77,10 @@ struct LATCHMenu: View {
 
             HStack {
                 Button("Overview") { openMainWindow(destination: .overview) }
-                Button("Settings") { openMainWindow(destination: .settings) }
+                Button("Manage") { openMainWindow(destination: .settings) }
+                SettingsLink {
+                    Text("Preferences…")
+                }
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }

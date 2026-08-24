@@ -258,6 +258,51 @@ struct ProbeAndPersistenceTests {
         #expect(await RecoveryStateStore(directory: root).automaticRetryState(for: id) == original)
     }
 
+    @Test func monitoringStateCommitsPauseAndRetryAtomically() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID()
+        let retry = AutomaticRetryState(kind: .missingMount, failures: 1, nextAttempt: .distantFuture)
+        let store = RecoveryStateStore(directory: root)
+        try await store.setPaused(false, for: id)
+        try await store.setAutomaticRetryState(retry, for: id)
+
+        let committed = try await store.setMonitoringState(
+            paused: true,
+            automaticRetry: nil,
+            for: id,
+            ifCurrent: { true }
+        )
+
+        #expect(committed)
+        #expect(await store.isPaused(id))
+        #expect(await store.automaticRetryState(for: id) == nil)
+    }
+
+    @Test func failedAtomicMonitoringWritePreservesBothPreviousValues() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID()
+        let retry = AutomaticRetryState(kind: .missingMount, failures: 1, nextAttempt: .distantFuture)
+        let workingStore = RecoveryStateStore(directory: root)
+        try await workingStore.setPaused(false, for: id)
+        try await workingStore.setAutomaticRetryState(retry, for: id)
+        let failingStore = RecoveryStateStore(directory: root, writer: FailingRecoveryStateWriter())
+
+        await #expect(throws: POSIXError.self) {
+            try await failingStore.setMonitoringState(
+                paused: true,
+                automaticRetry: nil,
+                for: id,
+                ifCurrent: { true }
+            )
+        }
+
+        let reloaded = RecoveryStateStore(directory: root)
+        #expect(await reloaded.isPaused(id) == false)
+        #expect(await reloaded.automaticRetryState(for: id) == retry)
+    }
+
     @Test func recoveryStateWriteFailurePreservesNetworkVolumeVerification() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

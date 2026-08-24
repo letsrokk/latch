@@ -170,6 +170,7 @@ struct XPCTests {
     @Test func operationRequestsRoundTrip() throws {
         let operationID = UUID()
 
+        #expect(try XPCCodec.decodeRequest(XPCCodec.encodeRequest(.getOperations)) == .getOperations)
         #expect(try XPCCodec.decodeRequest(XPCCodec.encodeRequest(.getOperation(operationID))) == .getOperation(operationID))
         #expect(try XPCCodec.decodeRequest(XPCCodec.encodeRequest(.cancelOperation(operationID))) == .cancelOperation(operationID))
     }
@@ -192,6 +193,10 @@ struct XPCTests {
         let response = LATCHResponse.operationSnapshot(snapshot)
         let data = try XPCCodec.encodeResponse(response, requestID: UUID())
         #expect(try JSONDecoder().decode(XPCResponseEnvelope.self, from: data).response == response)
+
+        let collection = LATCHResponse.operationSnapshots([snapshot])
+        let collectionData = try XPCCodec.encodeResponse(collection, requestID: UUID())
+        #expect(try JSONDecoder().decode(XPCResponseEnvelope.self, from: collectionData).response == collection)
     }
 
     @Test func discoveredServerSnapshotsRoundTrip() throws {
@@ -244,6 +249,24 @@ struct XPCTests {
             .dependencyStop(dependency, timeoutSeconds: 12),
             .dependencyStart(dependency),
             .dependencyVerifyRunning(dependency, timeoutSeconds: 30)
+        ]
+
+        for request in requests {
+            #expect(try AgentCodec.decode(AgentCodec.encode(request)) == request)
+        }
+    }
+
+    @Test func applicationAgentRequestsCarryTheExpectedBundleURL() throws {
+        let app = MacApplicationDependency(
+            bundleIdentifier: "com.example.Player",
+            applicationURL: "/Applications/Player.app",
+            forceQuitAfterTimeout: true
+        )
+        let requests: [AgentRequest] = [
+            .isRunning(app),
+            .stop(app, timeoutSeconds: 10),
+            .start(app),
+            .verifyRunning(app, timeoutSeconds: 30),
         ]
 
         for request in requests {

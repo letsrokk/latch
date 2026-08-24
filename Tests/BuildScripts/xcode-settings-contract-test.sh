@@ -6,10 +6,17 @@ project="$PWD/LATCH.xcodeproj"
 
 debug_settings="$(mktemp)"
 release_settings="$(mktemp)"
-trap 'rm -f "$debug_settings" "$release_settings"' EXIT
+derived_data="$(mktemp -d)"
+trap 'rm -f "$debug_settings" "$release_settings"; rm -rf "$derived_data"' EXIT
 
-xcodebuild -project "$project" -alltargets -configuration Debug -showBuildSettings -json > "$debug_settings"
-xcodebuild -project "$project" -alltargets -configuration Release -showBuildSettings -json > "$release_settings"
+build_locations=(
+    "SYMROOT=$derived_data/Build/Products"
+    "OBJROOT=$derived_data/Build/Intermediates.noindex"
+    "SHARED_PRECOMPS_DIR=$derived_data/Build/Intermediates.noindex/PrecompiledHeaders"
+    "CLANG_MODULE_CACHE_PATH=$derived_data/ModuleCache.noindex"
+)
+xcodebuild -project "$project" -alltargets -configuration Debug "${build_locations[@]}" -showBuildSettings -json > "$debug_settings"
+xcodebuild -project "$project" -alltargets -configuration Release "${build_locations[@]}" -showBuildSettings -json > "$release_settings"
 
 ruby -rjson -e '
   expected_targets = %w[LATCH LATCHAgent LATCHDaemon LATCHNative LATCHProbe LATCHShared LATCHTests]
@@ -43,6 +50,14 @@ ruby -rjson -e '
       abort "#{configuration} #{target} MACOSX_DEPLOYMENT_TARGET must be 15.0" unless get_setting.call(configuration, target, "MACOSX_DEPLOYMENT_TARGET") == "15.0"
       abort "#{configuration} #{target} DEVELOPMENT_TEAM must be DR8RRE2NCU" unless get_setting.call(configuration, target, "DEVELOPMENT_TEAM") == "DR8RRE2NCU"
       abort "#{configuration} #{target} ENABLE_HARDENED_RUNTIME must be YES" unless get_setting.call(configuration, target, "ENABLE_HARDENED_RUNTIME") == "YES"
+    end
+
+    if configuration == "Release"
+      expected_targets.each do |target|
+        abort "Release #{target} CLANG_ENABLE_CODE_COVERAGE must be NO" unless get_setting.call(configuration, target, "CLANG_ENABLE_CODE_COVERAGE") == "NO"
+        abort "Release #{target} CLANG_COVERAGE_MAPPING must be NO" unless get_setting.call(configuration, target, "CLANG_COVERAGE_MAPPING") == "NO"
+        abort "Release #{target} ENABLE_CODE_COVERAGE must be NO" unless get_setting.call(configuration, target, "ENABLE_CODE_COVERAGE") == "NO"
+      end
     end
 
     abort "LATCH Info.plist must remain Packaging/App-Info.plist" unless get_setting.call(configuration, "LATCH", "INFOPLIST_FILE") == "Packaging/App-Info.plist"

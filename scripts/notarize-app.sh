@@ -13,6 +13,8 @@ if [[ ! -d "$app" || "$app" != *.app ]]; then
     exit 66
 fi
 
+"${0:A:h}/validate-release-app.sh" "$app"
+
 temporary_directory="$(mktemp -d)"
 trap 'rm -rf "$temporary_directory"' EXIT
 archive="$temporary_directory/LATCH.zip"

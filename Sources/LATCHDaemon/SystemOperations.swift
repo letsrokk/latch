@@ -9,22 +9,24 @@ enum SystemOperationError: Error { case unavailable, conflict, nonEmptyMountPoin
 protocol ApplicationCoordinatorRequesting: AgentRequesting {}
 
 struct FixedProcess {
-    static func run(executable: String, arguments: [String], environment: [String: String]? = nil, timeout: Int = 30) throws {
-        let process = Process()
-        let errorPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        if let environment { process.environment = environment }
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = errorPipe
-        try process.run()
-        let deadline = Date().addingTimeInterval(Double(timeout))
-        while process.isRunning && Date() < deadline { usleep(25_000) }
-        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-        process.waitUntilExit()
-        let detail = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        guard process.terminationStatus == 0 else {
-            throw SystemCommandError(executable: executable, status: process.terminationStatus, detail: detail)
+    static func run(executable: String, arguments: [String], environment: [String: String]? = nil, timeout: Int = 30) async throws {
+        let result: BoundedProcessResult
+        do {
+            result = try await BoundedProcessRunner.run(
+                executable: executable,
+                arguments: arguments,
+                environment: environment,
+                timeout: .seconds(timeout)
+            )
+        } catch BoundedProcessError.timedOut {
+            throw SystemCommandError(executable: executable, status: SIGKILL, detail: "The command timed out.")
+        }
+        guard result.terminationStatus == 0 else {
+            throw SystemCommandError(
+                executable: executable,
+                status: result.terminationStatus,
+                detail: result.standardError
+            )
         }
     }
 }
@@ -67,7 +69,7 @@ actor SystemMountOperator: MountOperating {
         }
         try cancellation.throwIfCancelled()
         mountLogger.notice("Force-unmounting source-verified mountpoint \(target, privacy: .private(mask: .hash))")
-        try FixedProcess.run(executable: "/sbin/umount", arguments: ["-f", target], timeout: 20)
+        try await FixedProcess.run(executable: "/sbin/umount", arguments: ["-f", target], timeout: 20)
     }
 
     func validateEmptyMountPoint(_ mountPoint: String, cancellation: MountOperationCancellation) async throws {
@@ -83,7 +85,7 @@ actor SystemMountOperator: MountOperating {
         mountLogger.notice("Mounting definition \(definition.id.uuidString, privacy: .public)")
         try revalidate(binding)
         try cancellation.throwIfCancelled()
-        try FixedProcess.run(
+        try await FixedProcess.run(
             executable: "/sbin/mount",
             arguments: ["-t", "nfs", "-o", definition.mountOptions.encoded, definition.source, definition.mountPoint],
             timeout: 30
@@ -270,7 +272,7 @@ actor TypedDependencyOperator: DependencyOperating {
             _ = try await requireResponse(
                 .dependencyPrepare(dependency),
                 matching: .ready,
-                timeout: .seconds(10)
+                timeout: .seconds(15)
             )
         case .macApplication(let app):
             guard case .ready = try await applicationCoordinator.request(.prepare(app)) else { throw SystemOperationError.unavailable }
@@ -280,12 +282,14 @@ actor TypedDependencyOperator: DependencyOperating {
     func isRunning(_ dependency: RecoveryDependency) async throws -> Bool {
         switch dependency.kind {
         case .dockerContainer:
-            return try await requestDependency(
+            let response = try await requestDependency(
                 .dependencyIsRunning(dependency),
-                timeout: .seconds(10)
-            ).asRunning
+                timeout: .seconds(15)
+            )
+            guard case .running(let running) = response else { throw SystemOperationError.unavailable }
+            return running
         case .macApplication(let app):
-            guard case .running(let running) = try await applicationCoordinator.request(.isRunning(app.bundleIdentifier)) else { throw SystemOperationError.unavailable }
+            guard case .running(let running) = try await applicationCoordinator.request(.isRunning(app)) else { throw SystemOperationError.unavailable }
             return running
         }
     }
@@ -299,7 +303,7 @@ actor TypedDependencyOperator: DependencyOperating {
             _ = try await requireResponse(
                 .dependencyStop(dependency, timeoutSeconds: dependency.stopTimeoutSeconds),
                 matching: .succeeded,
-                timeout: .seconds(dependency.stopTimeoutSeconds + 5)
+                timeout: .seconds(dependency.stopTimeoutSeconds + 10)
             )
         case .macApplication(let app):
             try cancellation.throwIfCancelled()
@@ -316,7 +320,7 @@ actor TypedDependencyOperator: DependencyOperating {
             _ = try await requireResponse(
                 .dependencyStart(dependency),
                 matching: .succeeded,
-                timeout: .seconds(30)
+                timeout: .seconds(35)
             )
         case .macApplication(let app):
             try cancellation.throwIfCancelled()
@@ -331,10 +335,10 @@ actor TypedDependencyOperator: DependencyOperating {
             _ = try await requireResponse(
                 .dependencyVerifyRunning(dependency, timeoutSeconds: 30),
                 matching: .succeeded,
-                timeout: .seconds(30)
+                timeout: .seconds(35)
             )
         case .macApplication(let app):
-            guard case .succeeded = try await applicationCoordinator.request(.verifyRunning(app.bundleIdentifier, timeoutSeconds: 30)) else { throw SystemOperationError.unavailable }
+            guard case .succeeded = try await applicationCoordinator.request(.verifyRunning(app, timeoutSeconds: 30)) else { throw SystemOperationError.unavailable }
         }
         try cancellation.throwIfCancelled()
     }
@@ -344,7 +348,9 @@ actor TypedDependencyOperator: DependencyOperating {
         timeout: Duration
     ) async throws -> AgentResponse {
         let applicationCoordinator = self.applicationCoordinator
-        return try await ResponseDeadline.wait(for: timeout) { completion in
+        // A dependency side effect must be joined after local cancellation so recovery can
+        // record and compensate it before the queued operation becomes terminal.
+        return try await ResponseDeadline.wait(for: timeout, cancellationBehavior: .awaitResponse) { completion in
             Task {
                 do {
                     completion(.success(try await applicationCoordinator.request(request)))
@@ -365,12 +371,5 @@ actor TypedDependencyOperator: DependencyOperating {
         if case .succeeded = expected, case .succeeded = response { return response }
         if case .running = expected, case .running = response { return response }
         throw SystemOperationError.unavailable
-    }
-}
-
-private extension AgentResponse {
-    var asRunning: Bool {
-        if case .running(let value) = self { return value }
-        return false
     }
 }

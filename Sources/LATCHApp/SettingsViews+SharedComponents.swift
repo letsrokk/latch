@@ -184,12 +184,19 @@ struct ListEmptyStateView: View {
 struct ManagedMountActions: View {
     let definition: MountDefinition
     let canReveal: Bool
+    let operation: OperationSnapshot?
     let edit: () -> Void
     let remove: (() -> Void)?
     let action: (LATCHAction) -> Void
+    let cancel: (UUID) -> Void
 
     var body: some View {
         Menu {
+            if let operation {
+                Button("Cancel Operation") { cancel(operation.id) }
+                    .disabled(!operation.canCancel)
+                Divider()
+            }
             let sections = ManagedMountMenuPresentation.sections(includeRemoval: remove != nil)
             ForEach(Array(sections.enumerated()), id: \.offset) { sectionIndex, section in
                 ForEach(Array(section.enumerated()), id: \.offset) { _, item in
@@ -210,21 +217,35 @@ struct ManagedMountActions: View {
         switch item {
         case .reveal:
             Button(ManagedMountMenuPresentation.title(for: item)) { action(.reveal) }
-                .disabled(!ManagedMountMenuPresentation.isEnabled(item, monitoringEnabled: definition.enabled, canReveal: canReveal))
+                .disabled(!isEnabled(item))
         case .check:
             Button(ManagedMountMenuPresentation.title(for: item)) { action(.check) }
-                .disabled(!ManagedMountMenuPresentation.isEnabled(item, monitoringEnabled: definition.enabled, canReveal: canReveal))
+                .disabled(!isEnabled(item))
         case .mount:
             Button(ManagedMountMenuPresentation.title(for: item)) { action(.mount) }
+                .disabled(!isEnabled(item))
         case .editConfiguration:
             Button(ManagedMountMenuPresentation.title(for: item), action: edit)
+                .disabled(!isEnabled(item))
         case .unmount:
             Button(ManagedMountMenuPresentation.title(for: item), role: .destructive) { action(.unmount) }
+                .disabled(!isEnabled(item))
         case .recover:
             Button(ManagedMountMenuPresentation.title(for: item), role: .destructive) { action(.recover) }
+                .disabled(!isEnabled(item))
         case .removeDefinition:
             Button(ManagedMountMenuPresentation.title(for: item), role: .destructive) { remove?() }
+                .disabled(!isEnabled(item))
         }
+    }
+
+    private func isEnabled(_ item: ManagedMountMenuAction) -> Bool {
+        ManagedMountMenuPresentation.isEnabled(
+            item,
+            monitoringEnabled: definition.enabled,
+            canReveal: canReveal,
+            operationActive: operation != nil
+        )
     }
 }
 
