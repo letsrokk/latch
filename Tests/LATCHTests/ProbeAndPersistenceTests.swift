@@ -144,6 +144,25 @@ struct ProbeAndPersistenceTests {
         #expect(await reloaded.networkVolumesVerification() == .failed)
     }
 
+    @Test func corruptRecoveryStateIsQuarantinedAndReportedAsDegraded() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("corrupt-state".utf8).write(to: root.appendingPathComponent("state.json"))
+
+        let store = RecoveryStateStore(directory: root)
+        let health = await store.persistenceHealthSnapshot()
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.path)
+
+        #expect(health.isDegraded)
+        #expect(files.contains { $0.hasPrefix("state.corrupt-") && $0.hasSuffix(".json") })
+        #expect(await store.statuses().isEmpty)
+
+        try ConfigurationStore(directory: root).removeAllState()
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("state.json").path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+    }
+
     @Test func latchStoresPersistConfigurationAndRecoveryStateWithoutLegacyDirectory() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -46,10 +46,81 @@ extension AppModel {
             revealInFinder(definition)
             return
         }
-        await performRequest(.perform(definition.id, action, confirmed: confirmed))
-        if action == .mount, errorMessage == nil {
-            try? await Task.sleep(for: .seconds(4))
-            await refresh()
+
+        errorMessage = nil
+        do {
+            let response = try await send(.perform(definition.id, action, confirmed: confirmed))
+            switch response {
+            case .operationAccepted(let receipt):
+                await monitorOperation(receipt)
+            case .failure(_, let detail):
+                errorMessage = detail
+                await refresh()
+            default:
+                await refresh()
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func cancelOperation(_ operationID: UUID) async {
+        guard operationSnapshots[operationID]?.canCancel == true else { return }
+        do {
+            let response = try await send(.cancelOperation(operationID))
+            if case .operationSnapshot(let snapshot) = response {
+                operationSnapshots[operationID] = snapshot
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func monitorOperation(_ receipt: OperationReceipt) async {
+        operationSnapshots[receipt.id] = OperationSnapshot(
+            id: receipt.id,
+            mountID: receipt.mountID,
+            action: receipt.action,
+            state: .accepted,
+            canCancel: true,
+            detail: "Operation queued.",
+            updatedAt: receipt.startedAt
+        )
+
+        defer {
+            operationSnapshots[receipt.id] = nil
+            Task { @MainActor [weak self] in await self?.refresh() }
+        }
+
+        for attempt in 0..<120 where !Task.isCancelled {
+            do {
+                let response = try await send(.getOperation(receipt.id))
+                guard case .operationSnapshot(let snapshot) = response else {
+                    errorMessage = "The daemon returned an invalid operation response."
+                    return
+                }
+                operationSnapshots[receipt.id] = snapshot
+                switch snapshot.state {
+                case .accepted, .running:
+                    break
+                case .succeeded, .failed, .cancelled:
+                    if snapshot.state == .failed || snapshot.state == .cancelled {
+                        errorMessage = snapshot.detail
+                    }
+                    return
+                }
+                let delayMilliseconds = min(150 + attempt * 100, 1_000)
+                try await Task.sleep(for: .milliseconds(delayMilliseconds))
+            } catch is CancellationError {
+                return
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
+
+        if errorMessage == nil {
+            errorMessage = "The operation did not finish before the status timeout."
         }
     }
 

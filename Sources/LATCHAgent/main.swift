@@ -3,6 +3,7 @@ import Foundation
 import LATCHShared
 import OSLog
 import UserNotifications
+import Darwin
 
 final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXPCListenerDelegate, @unchecked Sendable {
     private let logger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "application-lifecycle")
@@ -46,6 +47,22 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
             let result = await probeRunner.run(mountPoint: mountPoint, timeoutSeconds: timeoutSeconds)
             logger.notice("User-context probe completed: \(String(describing: result), privacy: .public)")
             return .probe(result)
+        case .dependencyPrepare(let dependency):
+            try await executeDependency(dependency, operation: .prepare)
+            return .ready
+        case .dependencyIsRunning(let dependency):
+            return .running(await isDependencyRunning(dependency))
+        case .dependencyStop(let dependency, let timeout):
+            try await stopDependency(dependency, timeout: timeout)
+            return .succeeded
+        case .dependencyStart(let dependency):
+            try await startDependency(dependency)
+            return .succeeded
+        case .dependencyVerifyRunning(let dependency, let timeout):
+            if await isDependencyRunning(dependency, timeout: timeout) {
+                return .succeeded
+            }
+            return .failed("The dependency did not report as running.")
         case .prepare(let app):
             _ = try resolveAndValidate(app)
             return .ready
@@ -116,6 +133,209 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
     }
 
     @MainActor
+    private func executeDependency(_ dependency: RecoveryDependency, operation: DependencyOperation) async throws {
+        switch dependency.kind {
+        case .macApplication(let app):
+            try await executeMacApplicationDependency(app, operation: operation)
+        case .dockerContainer(let docker):
+            switch operation {
+            case .prepare, .verify:
+                _ = try await executeDockerCommand(
+                    .init(docker: docker, command: ["inspect", "--format", "{{.Id}}", docker.containerName]),
+                    timeout: 10
+                )
+            case .stop(let timeout):
+                _ = try await executeDockerCommand(
+                    .init(docker: docker, command: ["stop", "--time", String(timeout), docker.containerName]),
+                    timeout: timeout + 5
+                )
+            case .start:
+                _ = try await executeDockerCommand(
+                    .init(docker: docker, command: ["start", docker.containerName]),
+                    timeout: 30
+                )
+            case .isRunning:
+                _ = await isDependencyRunning(.init(id: dependency.id, enabled: dependency.enabled, stopTimeoutSeconds: dependency.stopTimeoutSeconds, kind: dependency.kind), timeout: 10)
+            }
+        }
+    }
+
+    @MainActor
+    private func isDependencyRunning(_ dependency: RecoveryDependency, timeout: Int = 10) async -> Bool {
+        switch dependency.kind {
+        case .macApplication(let app):
+            return runningApplication(app.bundleIdentifier) != nil
+        case .dockerContainer(let docker):
+            return (try? await isDockerContainerRunning(docker: docker, timeout: timeout)) ?? false
+        }
+    }
+
+    @MainActor
+    private func stopDependency(_ dependency: RecoveryDependency, timeout: Int) async throws {
+        try await executeDependency(dependency, operation: .stop(timeout: timeout))
+    }
+
+    @MainActor
+    private func startDependency(_ dependency: RecoveryDependency) async throws {
+        try await executeDependency(dependency, operation: .start)
+    }
+
+    @MainActor
+    private func executeMacApplicationDependency(_ app: MacApplicationDependency, operation: DependencyOperation) async throws {
+        switch operation {
+        case .prepare:
+            _ = try resolveAndValidate(app)
+        case .isRunning:
+            break
+        case .stop(let timeout):
+            guard let running = runningApplication(app.bundleIdentifier) else { return }
+            let applicationURL = try resolveAndValidate(app)
+            guard await stopApplication(
+                running,
+                applicationURL: applicationURL,
+                timeout: timeout,
+                allowForceQuit: app.forceQuitAfterTimeout
+            ) else {
+                throw ApplicationCoordinatorError.cannotStopSafely
+            }
+        case .start:
+            let applicationURL = try resolveAndValidate(app)
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            _ = try await NSWorkspace.shared.openApplication(
+                at: applicationURL,
+                configuration: configuration
+            )
+        case .verify:
+            if runningApplication(app.bundleIdentifier) == nil { throw ApplicationCoordinatorError.restartFailed }
+        }
+    }
+
+    @MainActor
+    private func stopApplication(
+        _ application: NSRunningApplication,
+        applicationURL: URL,
+        timeout: Int,
+        allowForceQuit: Bool
+    ) async -> Bool {
+        guard let bundleIdentifier = application.bundleIdentifier else { return false }
+        _ = application.terminate()
+        if await waitForExit(bundleIdentifier, timeout: max(1, timeout)) {
+            return true
+        }
+        let configuredBundleURL = applicationURL.standardizedFileURL.resolvingSymlinksInPath()
+        let runningBundleURL = application.bundleURL?.standardizedFileURL.resolvingSymlinksInPath()
+        guard allowForceQuit, configuredBundleURL == runningBundleURL else {
+            return false
+        }
+        guard application.forceTerminate() else { return false }
+        return await waitForExit(bundleIdentifier, timeout: 5)
+    }
+
+    @MainActor
+    private func waitForExit(_ bundleIdentifier: String, timeout: Int) async -> Bool {
+        guard timeout > 0 else { return false }
+        return await waitUntil(timeout: timeout) { [self] in runningApplication(bundleIdentifier) == nil }
+    }
+
+    @MainActor
+    private func isDockerContainerRunning(docker: DockerContainerDependency, timeout: Int) async throws -> Bool {
+        let output = try await executeDockerCommand(.init(docker: docker, command: ["inspect", "--format", "{{.State.Running}}", docker.containerName]), timeout: timeout)
+        return output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+    }
+
+    @MainActor
+    private func executeDockerCommand(_ request: DockerCommandRequest, timeout: Int) async throws -> String {
+        let executable = try dockerExecutablePath()
+        let environment = dockerEnvironment(docker: request.docker)
+        return try await Task.detached(priority: .userInitiated) {
+            try DockerCommandRunner.run(
+                executable: executable,
+                arguments: request.command,
+                environment: environment,
+                timeout: timeout
+            )
+        }.value
+    }
+
+    @MainActor
+    private func dockerEnvironment(docker: DockerContainerDependency) -> [String: String] {
+        var environment = [
+            "DOCKER_HOST": "unix://\(docker.dockerSocketPath)",
+            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        ]
+        if let compose = docker.composeFilePath { environment["COMPOSE_FILE"] = compose }
+        return environment
+    }
+
+    @MainActor
+    private func dockerExecutablePath() throws -> String {
+        let candidates = ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/Applications/Docker.app/Contents/Resources/bin/docker"]
+        for path in candidates where FileManager.default.isExecutableFile(atPath: path) { return path }
+        throw ApplicationCoordinatorError.missingDockerRuntime
+    }
+
+    private enum DependencyOperation {
+        case prepare
+        case isRunning
+        case stop(timeout: Int)
+        case start
+        case verify
+    }
+
+    private struct DockerCommandRequest {
+        let docker: DockerContainerDependency
+        let command: [String]
+    }
+
+    private enum DockerCommandRunner {
+        private final class OutputBuffer: @unchecked Sendable {
+            private let lock = NSLock()
+            private var data = Data()
+
+            func append(_ value: Data) { lock.withLock { data.append(value) } }
+            var snapshot: Data { lock.withLock { data } }
+        }
+
+        static func run(executable: String, arguments: [String], environment: [String: String], timeout: Int) throws -> String {
+            let process = Process()
+            let pipe = Pipe()
+            let errorPipe = Pipe()
+            let outputData = OutputBuffer()
+            let errorData = OutputBuffer()
+            pipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                outputData.append(data)
+            }
+            errorPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                errorData.append(data)
+            }
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            process.environment = environment
+            process.standardOutput = pipe
+            process.standardError = errorPipe
+            try process.run()
+            let deadline = Date().addingTimeInterval(Double(timeout))
+            while process.isRunning && Date() < deadline { usleep(25_000) }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            errorPipe.fileHandleForReading.readabilityHandler = nil
+            outputData.append(pipe.fileHandleForReading.readDataToEndOfFile())
+            errorData.append(errorPipe.fileHandleForReading.readDataToEndOfFile())
+            let detail = String(decoding: errorData.snapshot, as: UTF8.self)
+            guard process.terminationStatus == 0 else {
+                throw ApplicationCoordinatorError.dockerUnavailable(detail.isEmpty ? "The Docker command failed." : detail)
+            }
+            return String(decoding: outputData.snapshot, as: UTF8.self)
+        }
+    }
+
+    @MainActor
     private func resolveAndValidate(_ app: MacApplicationDependency) throws -> URL {
         let resolved = app.applicationURL.map { URL(fileURLWithPath: $0) }
             ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier)
@@ -123,7 +343,7 @@ final class ApplicationCoordinatorService: NSObject, LATCHAgentXPCProtocol, NSXP
               Bundle(url: resolved)?.bundleIdentifier == app.bundleIdentifier else {
             throw ApplicationCoordinatorError.invalidRelaunchTarget
         }
-        return resolved.standardizedFileURL
+        return resolved.standardizedFileURL.resolvingSymlinksInPath()
     }
 
     @MainActor
@@ -282,7 +502,7 @@ private final class StatusNotifier {
 }
 
 enum ApplicationCoordinatorError: LocalizedError {
-    case invalidRelaunchTarget, cannotStopSafely, restartFailed, daemonUnavailable, postMountActionFailed
+    case invalidRelaunchTarget, cannotStopSafely, restartFailed, daemonUnavailable, postMountActionFailed, missingDockerRuntime, dockerUnavailable(String)
     var errorDescription: String? {
         switch self {
         case .invalidRelaunchTarget: "The application bundle identifier and relaunch target could not be validated."
@@ -290,6 +510,8 @@ enum ApplicationCoordinatorError: LocalizedError {
         case .restartFailed: "The application did not restart before the deadline."
         case .daemonUnavailable: "The privileged daemon is unavailable."
         case .postMountActionFailed: "The requested post-mount action could not be completed."
+        case .missingDockerRuntime: "Docker is required but no known executable was found."
+        case .dockerUnavailable(let detail): detail
         }
     }
 }

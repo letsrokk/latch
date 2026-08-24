@@ -228,8 +228,13 @@ extension DaemonController {
         return await mountWorkIsCurrent(token, definition: definition, automatic: automatic)
     }
 
-    func mountCancellation(for token: MountWorkToken) -> MountOperationCancellation {
-        MountOperationCancellation(isCancelled: { [mountWork] in !mountWork.isCurrent(token) })
+    func mountCancellation(
+        for token: MountWorkToken,
+        operationCancellation: OperationCancellationToken? = nil
+    ) -> MountOperationCancellation {
+        MountOperationCancellation(isCancelled: { [mountWork, operationCancellation] in
+            !mountWork.isCurrent(token) || operationCancellation?.isCancelled == true
+        })
     }
 
     func mountFailureCode(for error: Error) -> LATCHErrorCode {

@@ -11,6 +11,7 @@ LATCH (LAN Automount, Tracking, Connection & Health) keeps NFS volumes available
 - **Network-aware server access.** Bonjour discovery helps find NFS servers, network rules control where mounts are available, and optional Wake-on-LAN can bring a sleeping server online before mounting.
 - **Dependency-aware recovery.** LATCH can coordinate Docker containers and macOS applications around a remount, stopping them in order and restarting only the processes that were previously running.
 - **At-a-glance operations.** The Overview, Managed Mounts, Servers, External Mounts, and Activity views make health, recovery state, and recent events easy to inspect.
+- **Observable long-running actions.** Mount, unmount, check, and recovery requests return an operation receipt. The app tracks accepted, running, completed, failed, and canceled states instead of guessing completion from a fixed delay.
 - **Privileged operations with a narrow trust boundary.** A root LaunchDaemon owns configuration and mount operations, while signed XPC connections, fixed executables, and typed requests keep the GUI out of the root context.
 - **Non-invasive external mount visibility.** NFS mounts that LATCH does not manage remain read-only observations; the app never imports, probes, unmounts, or changes them.
 

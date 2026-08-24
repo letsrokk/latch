@@ -24,6 +24,11 @@ public enum AgentRequest: Codable, Sendable, Equatable {
     case stop(MacApplicationDependency, timeoutSeconds: Int)
     case start(MacApplicationDependency)
     case verifyRunning(String, timeoutSeconds: Int)
+    case dependencyPrepare(RecoveryDependency)
+    case dependencyIsRunning(RecoveryDependency)
+    case dependencyStop(RecoveryDependency, timeoutSeconds: Int)
+    case dependencyStart(RecoveryDependency)
+    case dependencyVerifyRunning(RecoveryDependency, timeoutSeconds: Int)
     case executePostMountActions(PostMountActionDelivery)
     case revealManagedMount(mountPoint: String)
 }

@@ -6,7 +6,7 @@ import Foundation
 /// those handlers in this nonisolated client prevents Swift runtime executor
 /// assertions when a main-actor UI or login-agent component makes a request.
 public final class LATCHDaemonRequestClient: @unchecked Sendable {
-    public typealias Transport = (Data, (@escaping () -> Void) -> Void) async throws -> Data
+    public typealias Transport = @Sendable (Data, @escaping @Sendable (@escaping @Sendable () -> Void) -> Void) async throws -> Data
 
     private let responseTimeout: Duration
     private let transport: Transport
@@ -20,6 +20,7 @@ public final class LATCHDaemonRequestClient: @unchecked Sendable {
         let requestID = UUID()
         let requestData = try XPCCodec.encodeRequest(request, requestID: requestID)
         let cancelTransport = CancellationHandle()
+        let transport = self.transport
 
         let responseData = try await ResponseDeadline.wait(
             for: responseTimeout,

@@ -4,6 +4,56 @@ public enum LATCHAction: String, Codable, Sendable, Equatable {
     case mount, unmount, check, recover, reveal
 }
 
+public enum OperationState: String, Codable, Sendable, Equatable {
+    case accepted
+    case running
+    case succeeded
+    case failed
+    case cancelled
+}
+
+public struct OperationReceipt: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let mountID: UUID
+    public let action: LATCHAction
+    public let startedAt: Date
+
+    public init(id: UUID, mountID: UUID, action: LATCHAction, startedAt: Date = Date()) {
+        self.id = id
+        self.mountID = mountID
+        self.action = action
+        self.startedAt = startedAt
+    }
+}
+
+public struct OperationSnapshot: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let mountID: UUID
+    public let action: LATCHAction
+    public let state: OperationState
+    public let canCancel: Bool
+    public let detail: String?
+    public let updatedAt: Date
+
+    public init(
+        id: UUID,
+        mountID: UUID,
+        action: LATCHAction,
+        state: OperationState,
+        canCancel: Bool,
+        detail: String? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.mountID = mountID
+        self.action = action
+        self.state = state
+        self.canCancel = canCancel
+        self.detail = detail
+        self.updatedAt = updatedAt
+    }
+}
+
 public enum LATCHRequest: Codable, Sendable, Equatable {
     case getServiceStatus
     case getStatus
@@ -18,6 +68,8 @@ public enum LATCHRequest: Codable, Sendable, Equatable {
     case removeDefinition(UUID, confirmMounted: Bool)
     case setEnabled(UUID, Bool)
     case perform(UUID, LATCHAction, confirmed: Bool)
+    case getOperation(UUID)
+    case cancelOperation(UUID)
     case getRecentEvents(limit: Int)
     case clearEvents
     case getExternalMounts
@@ -37,6 +89,8 @@ public enum LATCHResponse: Codable, Sendable, Equatable {
     case externalMounts([ExternalMountSnapshot])
     case discoveredServers([DiscoveredNFSServer])
     case accepted
+    case operationAccepted(OperationReceipt)
+    case operationSnapshot(OperationSnapshot)
     case failure(LATCHErrorCode, String)
 }
 

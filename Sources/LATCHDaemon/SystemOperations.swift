@@ -258,7 +258,6 @@ struct NativeNFSReachability: WakeOnLANReachabilityChecking {
 
 actor TypedDependencyOperator: DependencyOperating {
     private let dependencyLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "dependencies")
-    private let dockerLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "docker")
     private let applicationCoordinator: any ApplicationCoordinatorRequesting
 
     init(applicationCoordinator: any ApplicationCoordinatorRequesting) {
@@ -267,8 +266,12 @@ actor TypedDependencyOperator: DependencyOperating {
 
     func prepare(_ dependency: RecoveryDependency) async throws {
         switch dependency.kind {
-        case .dockerContainer(let docker):
-            try dockerCommand(docker, ["inspect", docker.containerName], timeout: 10)
+        case .dockerContainer:
+            _ = try await requireResponse(
+                .dependencyPrepare(dependency),
+                matching: .ready,
+                timeout: .seconds(10)
+            )
         case .macApplication(let app):
             guard case .ready = try await applicationCoordinator.request(.prepare(app)) else { throw SystemOperationError.unavailable }
         }
@@ -276,8 +279,11 @@ actor TypedDependencyOperator: DependencyOperating {
 
     func isRunning(_ dependency: RecoveryDependency) async throws -> Bool {
         switch dependency.kind {
-        case .dockerContainer(let docker):
-            return (try? dockerOutput(docker, ["inspect", "--format", "{{.State.Running}}", docker.containerName], timeout: 10))?.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+        case .dockerContainer:
+            return try await requestDependency(
+                .dependencyIsRunning(dependency),
+                timeout: .seconds(10)
+            ).asRunning
         case .macApplication(let app):
             guard case .running(let running) = try await applicationCoordinator.request(.isRunning(app.bundleIdentifier)) else { throw SystemOperationError.unavailable }
             return running
@@ -288,9 +294,13 @@ actor TypedDependencyOperator: DependencyOperating {
         try cancellation.throwIfCancelled()
         dependencyLogger.notice("Stopping dependency \(dependency.id.uuidString, privacy: .public)")
         switch dependency.kind {
-        case .dockerContainer(let docker):
+        case .dockerContainer:
             try cancellation.throwIfCancelled()
-            try dockerCommand(docker, ["stop", "--time", String(dependency.stopTimeoutSeconds), docker.containerName], timeout: dependency.stopTimeoutSeconds + 5)
+            _ = try await requireResponse(
+                .dependencyStop(dependency, timeoutSeconds: dependency.stopTimeoutSeconds),
+                matching: .succeeded,
+                timeout: .seconds(dependency.stopTimeoutSeconds + 5)
+            )
         case .macApplication(let app):
             try cancellation.throwIfCancelled()
             guard case .succeeded = try await applicationCoordinator.request(.stop(app, timeoutSeconds: dependency.stopTimeoutSeconds)) else { throw SystemOperationError.unavailable }
@@ -301,9 +311,13 @@ actor TypedDependencyOperator: DependencyOperating {
         try cancellation.throwIfCancelled()
         dependencyLogger.notice("Starting dependency \(dependency.id.uuidString, privacy: .public)")
         switch dependency.kind {
-        case .dockerContainer(let docker):
+        case .dockerContainer:
             try cancellation.throwIfCancelled()
-            try dockerCommand(docker, ["start", docker.containerName], timeout: 30)
+            _ = try await requireResponse(
+                .dependencyStart(dependency),
+                matching: .succeeded,
+                timeout: .seconds(30)
+            )
         case .macApplication(let app):
             try cancellation.throwIfCancelled()
             guard case .succeeded = try await applicationCoordinator.request(.start(app)) else { throw SystemOperationError.unavailable }
@@ -314,43 +328,49 @@ actor TypedDependencyOperator: DependencyOperating {
         try cancellation.throwIfCancelled()
         switch dependency.kind {
         case .dockerContainer:
-            guard try await isRunning(dependency) else { throw SystemOperationError.unavailable }
+            _ = try await requireResponse(
+                .dependencyVerifyRunning(dependency, timeoutSeconds: 30),
+                matching: .succeeded,
+                timeout: .seconds(30)
+            )
         case .macApplication(let app):
             guard case .succeeded = try await applicationCoordinator.request(.verifyRunning(app.bundleIdentifier, timeoutSeconds: 30)) else { throw SystemOperationError.unavailable }
         }
         try cancellation.throwIfCancelled()
     }
 
-    private func dockerCommand(_ dependency: DockerContainerDependency, _ arguments: [String], timeout: Int) throws {
-        dockerLogger.debug("Running fixed Docker operation \(arguments.first ?? "unknown", privacy: .public) for \(dependency.containerName, privacy: .public)")
-        try FixedProcess.run(executable: "/usr/local/bin/docker", arguments: arguments, environment: dockerEnvironment(dependency), timeout: timeout)
-    }
-
-    private func dockerOutput(_ dependency: DockerContainerDependency, _ arguments: [String], timeout: Int) throws -> String {
-        let process = Process()
-        let pipe = Pipe()
-        let errorPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/docker")
-        process.arguments = arguments
-        process.environment = dockerEnvironment(dependency)
-        process.standardOutput = pipe
-        process.standardError = errorPipe
-        try process.run()
-        let deadline = Date().addingTimeInterval(Double(timeout))
-        while process.isRunning && Date() < deadline { usleep(25_000) }
-        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-        process.waitUntilExit()
-        let detail = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        guard process.terminationStatus == 0 else {
-            throw SystemCommandError(executable: "/usr/local/bin/docker", status: process.terminationStatus, detail: detail)
+    private func requestDependency(
+        _ request: AgentRequest,
+        timeout: Duration
+    ) async throws -> AgentResponse {
+        let applicationCoordinator = self.applicationCoordinator
+        return try await ResponseDeadline.wait(for: timeout) { completion in
+            Task {
+                do {
+                    completion(.success(try await applicationCoordinator.request(request)))
+                } catch {
+                    completion(.failure(error))
+                }
+            }
         }
-        return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     }
 
-    private func dockerEnvironment(_ dependency: DockerContainerDependency) -> [String: String] {
-        var environment = ["DOCKER_HOST": "unix://\(dependency.dockerSocketPath)", "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"]
-        if let compose = dependency.composeFilePath { environment["COMPOSE_FILE"] = compose }
-        return environment
+    private func requireResponse(
+        _ request: AgentRequest,
+        matching expected: AgentResponse,
+        timeout: Duration
+    ) async throws -> AgentResponse {
+        let response = try await requestDependency(request, timeout: timeout)
+        if case .ready = expected, case .ready = response { return response }
+        if case .succeeded = expected, case .succeeded = response { return response }
+        if case .running = expected, case .running = response { return response }
+        throw SystemOperationError.unavailable
     }
+}
 
+private extension AgentResponse {
+    var asRunning: Bool {
+        if case .running(let value) = self { return value }
+        return false
+    }
 }

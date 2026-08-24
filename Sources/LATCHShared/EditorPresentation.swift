@@ -416,7 +416,7 @@ public enum ResponseDeadline {
     public static func wait<Value: Sendable>(
         for timeout: Duration,
         onTimeout: @escaping @Sendable () -> Void = {},
-        start: (@escaping @Sendable (Result<Value, any Error>) -> Void) -> Void
+        start: @escaping @Sendable (@escaping @Sendable (Result<Value, any Error>) -> Void) -> Void
     ) async throws -> Value {
         try await withCheckedThrowingContinuation { continuation in
             let gate = ResponseContinuationGate(continuation)

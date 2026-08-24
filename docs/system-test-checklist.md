@@ -16,6 +16,7 @@ Run these checks on a disposable NFS export before enabling recovery for product
 12. Confirm external NFS mounts appear only in External Mounts and cannot be imported, edited, probed, recovered, or included in aggregate health.
 13. Reboot and log out/in. Confirm service authorization, configuration, typed options, managed mounts, and last status survive.
 14. Run uninstall with and without app-owned unmount. Confirm it removes only LATCH monitoring services and state while preserving external mounts, `fstab`, autofs, Docker configuration, and unified logs.
+15. Start a long-running manual mount or recovery action, confirm the UI reports accepted/running state, then cancel it. Verify the operation reaches `cancelled`, no later success is reported, and the mount status refreshes to the daemon's actual state.
 
 The repeatable installed-system workflow is available through the opt-in harness:
 

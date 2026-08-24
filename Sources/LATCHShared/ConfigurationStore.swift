@@ -136,7 +136,10 @@ public struct ConfigurationStore: Sendable {
 
     public func removeAllState() throws {
         let manager = FileManager.default
-        for url in [configurationURL, lastKnownGoodURL, schema1RollbackURL, directory.appendingPathComponent("state.json")] where manager.fileExists(atPath: url.path) {
+        let quarantineURLs = (try? manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))?.filter {
+            $0.lastPathComponent.hasPrefix("state.corrupt-") && $0.pathExtension == "json"
+        } ?? []
+        for url in [configurationURL, lastKnownGoodURL, schema1RollbackURL, directory.appendingPathComponent("state.json")] + quarantineURLs where manager.fileExists(atPath: url.path) {
             try manager.removeItem(at: url)
         }
     }
@@ -250,9 +253,12 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
 
     public init(directory: URL, writer: RecoveryStateWriting? = nil) {
         self.directory = directory
-        stateURL = directory.appendingPathComponent("state.json")
+        let stateURL = directory.appendingPathComponent("state.json")
+        self.stateURL = stateURL
         self.writer = writer ?? AtomicRecoveryStateWriter()
-        state = (try? JSONDecoder().decode(State.self, from: Data(contentsOf: stateURL))) ?? State()
+        let loaded = Self.loadState(at: stateURL)
+        state = loaded.state
+        persistenceHealthState = loaded.health
     }
 
     public func persistenceHealthSnapshot() -> PersistenceHealthSnapshot { persistenceHealthState }
@@ -409,6 +415,35 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
 
     private func persist() throws {
         try persist(state)
+    }
+
+    private static func loadState(at url: URL) -> (state: State, health: PersistenceHealthSnapshot) {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: url.path) else { return (State(), .healthy) }
+
+        do {
+            return (try JSONDecoder().decode(State.self, from: Data(contentsOf: url)), .healthy)
+        } catch {
+            let nsError = error as NSError
+            let quarantineURL = url.deletingLastPathComponent()
+                .appendingPathComponent("state.corrupt-\(UUID().uuidString).json")
+            do {
+                try manager.moveItem(at: url, to: quarantineURL)
+                _ = chmod(quarantineURL.path, mode_t(0o600))
+                persistenceLogger.error("Quarantined corrupt recovery state at \(quarantineURL.path, privacy: .private(mask: .hash))")
+            } catch {
+                persistenceLogger.error("Could not quarantine corrupt recovery state: \(error.localizedDescription, privacy: .private)")
+            }
+            return (
+                State(),
+                PersistenceHealthSnapshot(
+                    isDegraded: true,
+                    lastFailureAt: Date(),
+                    lastErrorDomain: nsError.domain,
+                    lastErrorCode: nsError.code
+                )
+            )
+        }
     }
 
     private func persist(_ candidate: State) throws {

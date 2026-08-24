@@ -61,7 +61,9 @@ struct LATCHMenu: View {
                             definition: definition,
                             status: model.statuses.first { $0.definitionID == definition.id },
                             expectedSource: model.configuration.resolve(definition)?.source,
-                            request: request
+                            operation: model.operationSnapshots.values.first { $0.mountID == definition.id },
+                            request: request,
+                            cancel: { operationID in Task { await model.cancelOperation(operationID) } }
                         )
                         if definition.id != displayed.last?.id { Divider() }
                     }
@@ -136,10 +138,12 @@ private struct MountMenuRow: View {
     let definition: MountDefinition
     let status: MountStatus?
     let expectedSource: String?
+    let operation: OperationSnapshot?
     let request: (LATCHAction, MountDefinition) -> Void
+    let cancel: (UUID) -> Void
 
     var body: some View {
-        let statusTitle = MountStatusIndicatorPresentation(state: status?.state, enabled: definition.enabled).statusTitle
+        let statusTitle = operation?.detail ?? MountStatusIndicatorPresentation(state: status?.state, enabled: definition.enabled).statusTitle
         let presentation = LATCHMenuMountPresentation(
             definition: definition,
             source: expectedSource ?? "Unknown server",
@@ -168,17 +172,22 @@ private struct MountMenuRow: View {
                 .foregroundStyle(.secondary)
             }
             Menu {
+                if let operation {
+                    Button("Cancel Operation") { cancel(operation.id) }
+                        .disabled(!operation.canCancel)
+                    Divider()
+                }
                 Button("Reveal in Finder") { request(.reveal, definition) }
                     .disabled(!MountRevealPolicy.isAvailable(
                         observedSource: status?.observedSource,
                         expectedSource: expectedSource
-                    ))
+                    ) || operation != nil)
                 Button("Check Now") { request(.check, definition) }
-                    .disabled(!definition.enabled)
+                    .disabled(!definition.enabled || operation != nil)
                 Divider()
-                Button("Mount") { request(.mount, definition) }
-                Button("Unmount", role: .destructive) { request(.unmount, definition) }
-                Button("Recover", role: .destructive) { request(.recover, definition) }
+                Button("Mount") { request(.mount, definition) }.disabled(operation != nil)
+                Button("Unmount", role: .destructive) { request(.unmount, definition) }.disabled(operation != nil)
+                Button("Recover", role: .destructive) { request(.recover, definition) }.disabled(operation != nil)
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton)
                 .fixedSize()

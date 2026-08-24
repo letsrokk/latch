@@ -167,6 +167,33 @@ struct XPCTests {
         #expect(try XPCCodec.decodeRequest(XPCCodec.encodeRequest(request)) == request)
     }
 
+    @Test func operationRequestsRoundTrip() throws {
+        let operationID = UUID()
+
+        #expect(try XPCCodec.decodeRequest(XPCCodec.encodeRequest(.getOperation(operationID))) == .getOperation(operationID))
+        #expect(try XPCCodec.decodeRequest(XPCCodec.encodeRequest(.cancelOperation(operationID))) == .cancelOperation(operationID))
+    }
+
+    @Test func operationSnapshotsRoundTrip() throws {
+        let receipt = OperationReceipt(id: UUID(), mountID: UUID(), action: .mount, startedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        let accepted = LATCHResponse.operationAccepted(receipt)
+        let acceptedData = try XPCCodec.encodeResponse(accepted, requestID: UUID())
+        #expect(try JSONDecoder().decode(XPCResponseEnvelope.self, from: acceptedData).response == accepted)
+
+        let snapshot = OperationSnapshot(
+            id: receipt.id,
+            mountID: receipt.mountID,
+            action: receipt.action,
+            state: .running,
+            canCancel: true,
+            detail: "Mounting the configured NFS volume.",
+            updatedAt: Date(timeIntervalSince1970: 1_800_000_001)
+        )
+        let response = LATCHResponse.operationSnapshot(snapshot)
+        let data = try XPCCodec.encodeResponse(response, requestID: UUID())
+        #expect(try JSONDecoder().decode(XPCResponseEnvelope.self, from: data).response == response)
+    }
+
     @Test func discoveredServerSnapshotsRoundTrip() throws {
         let expected = [DiscoveredNFSServer(name: "Media", hostname: "nas.local", port: 2049)]
         let response = LATCHResponse.discoveredServers(expected)
@@ -196,6 +223,32 @@ struct XPCTests {
     @Test func userProbeRequestRoundTrips() throws {
         let request = AgentRequest.probe(mountPoint: "/Users/test/Music", timeoutSeconds: 7)
         #expect(try AgentCodec.decode(AgentCodec.encode(request)) == request)
+    }
+
+    @Test func dependencyAgentRequestsRoundTrip() throws {
+        let dependency = RecoveryDependency(
+            id: UUID(),
+            enabled: true,
+            stopTimeoutSeconds: 12,
+            kind: .dockerContainer(
+                DockerContainerDependency(
+                    containerName: "media-server",
+                    dockerSocketPath: "/var/run/docker.sock",
+                    composeFilePath: "/tmp/compose.yml"
+                )
+            )
+        )
+        let requests: [AgentRequest] = [
+            .dependencyPrepare(dependency),
+            .dependencyIsRunning(dependency),
+            .dependencyStop(dependency, timeoutSeconds: 12),
+            .dependencyStart(dependency),
+            .dependencyVerifyRunning(dependency, timeoutSeconds: 30)
+        ]
+
+        for request in requests {
+            #expect(try AgentCodec.decode(AgentCodec.encode(request)) == request)
+        }
     }
 
     @Test func userProbeRunnerReturnsTheAgentsProbeResult() async {

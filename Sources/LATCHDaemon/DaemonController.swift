@@ -2,6 +2,17 @@ import Foundation
 import LATCHShared
 import OSLog
 
+final class OperationCancellationToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+
+    func cancel() {
+        lock.withLock { cancelled = true }
+    }
+}
+
 actor DaemonController {
     let logger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "configuration")
     let stateLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "mount")
@@ -27,6 +38,10 @@ actor DaemonController {
     var events: [LATCHEvent] = []
     var networkVolumesVerification: NetworkVolumesVerificationState = .notChecked
     var monitoringTask: Task<Void, Never>?
+    var operationTasks: [UUID: Task<Void, Never>] = [:]
+    var operationSnapshots: [UUID: OperationSnapshot] = [:]
+    var operationCancellations: [UUID: OperationCancellationToken] = [:]
+    var operationMountIDs: [UUID: UUID] = [:]
     var lastChecks: [UUID: Date] = [:]
     var mountedAt: [UUID: Date] = [:]
     var lastRuleSatisfaction: [UUID: Bool] = [:]
@@ -200,7 +215,14 @@ actor DaemonController {
             case .perform(let id, let action, let confirmed):
                 guard let definition = configuration.mounts.first(where: { $0.id == id }) else { return .failure(.malformedRequest, "Unknown mount definition.") }
                 guard let resolved = resolvedDefinition(definition) else { return .failure(.malformedRequest, "The mount references an unknown NFS server.") }
-                return await perform(action, definition: resolved, confirmed: confirmed)
+                return queueOperation(action: action, definition: resolved, confirmed: confirmed)
+            case .getOperation(let operationID):
+                guard let snapshot = operationSnapshots[operationID] else {
+                    return .failure(.malformedRequest, "Unknown operation.")
+                }
+                return .operationSnapshot(snapshot)
+            case .cancelOperation(let operationID):
+                return cancelOperation(operationID)
             case .verifyNetworkVolumesPermission:
                 await setVerification(.checking)
                 let verification = await verifyPermission()
@@ -238,7 +260,130 @@ actor DaemonController {
         }
     }
 
-    func perform(_ action: LATCHAction, definition: MountDefinition, confirmed: Bool) async -> LATCHResponse {
+    private func queueOperation(action: LATCHAction, definition: MountDefinition, confirmed: Bool) -> LATCHResponse {
+        let operationID = UUID()
+        let receipt = OperationReceipt(id: operationID, mountID: definition.id, action: action)
+        let cancellation = OperationCancellationToken()
+        operationSnapshots[operationID] = OperationSnapshot(
+            id: operationID,
+            mountID: definition.id,
+            action: action,
+            state: .accepted,
+            canCancel: true,
+            detail: "Operation queued.",
+            updatedAt: receipt.startedAt
+        )
+        operationCancellations[operationID] = cancellation
+        operationMountIDs[operationID] = definition.id
+        let operation = Task { [weak self] in
+            guard let self else { return }
+            if cancellation.isCancelled || Task.isCancelled {
+                await self.updateOperation(operationID, state: .cancelled, canCancel: false, detail: "Operation cancelled.")
+                await self.finishQueuedOperation(operationID)
+                return
+            }
+            self.logger.notice("Queued operation started: \(action.rawValue, privacy: .public) / \(operationID.uuidString, privacy: .public)")
+            await self.updateOperation(
+                operationID,
+                state: .running,
+                canCancel: true,
+                detail: "Operation in progress."
+            )
+            let response = await self.perform(
+                action,
+                definition: definition,
+                confirmed: confirmed,
+                operationCancellation: cancellation
+            )
+            if cancellation.isCancelled || Task.isCancelled {
+                self.logger.notice("Queued operation cancelled: \(operationID.uuidString, privacy: .public)")
+                await self.updateOperation(
+                    operationID,
+                    state: .cancelled,
+                    canCancel: false,
+                    detail: "Operation cancelled."
+                )
+            } else if case .failure(let code, let detail) = response {
+                self.logger.error("Queued operation failed: \(code.rawValue, privacy: .public) / \(detail, privacy: .public)")
+                await self.updateOperation(operationID, state: .failed, canCancel: false, detail: detail)
+            } else {
+                self.logger.notice("Queued operation completed: \(operationID.uuidString, privacy: .public)")
+                await self.updateOperation(operationID, state: .succeeded, canCancel: false, detail: "Operation completed.")
+            }
+            await self.finishQueuedOperation(operationID)
+        }
+        operationTasks[operationID] = operation
+        return .operationAccepted(receipt)
+    }
+
+    private func finishQueuedOperation(_ operationID: UUID) {
+        operationTasks.removeValue(forKey: operationID)
+        operationCancellations.removeValue(forKey: operationID)
+        operationMountIDs.removeValue(forKey: operationID)
+        trimOperationSnapshots()
+    }
+
+    private func updateOperation(
+        _ operationID: UUID,
+        state: OperationState,
+        canCancel: Bool,
+        detail: String?
+    ) {
+        guard let current = operationSnapshots[operationID] else { return }
+        operationSnapshots[operationID] = OperationSnapshot(
+            id: current.id,
+            mountID: current.mountID,
+            action: current.action,
+            state: state,
+            canCancel: canCancel,
+            detail: detail,
+            updatedAt: Date()
+        )
+    }
+
+    private func cancelOperation(_ operationID: UUID) -> LATCHResponse {
+        guard let current = operationSnapshots[operationID] else {
+            return .failure(.malformedRequest, "Unknown operation.")
+        }
+        guard current.state == .accepted || current.state == .running else {
+            return .operationSnapshot(current)
+        }
+        operationCancellations[operationID]?.cancel()
+        if let mountID = operationMountIDs[operationID] {
+            mountWork.invalidate(mountID)
+        }
+        operationTasks[operationID]?.cancel()
+        logger.notice("Queued operation cancellation requested: \(operationID.uuidString, privacy: .public)")
+        let requested = OperationSnapshot(
+            id: current.id,
+            mountID: current.mountID,
+            action: current.action,
+            state: current.state,
+            canCancel: false,
+            detail: "Cancellation requested.",
+            updatedAt: Date()
+        )
+        operationSnapshots[operationID] = requested
+        return .operationSnapshot(requested)
+    }
+
+    private func trimOperationSnapshots() {
+        guard operationSnapshots.count > 100 else { return }
+        let terminal = operationSnapshots.values
+            .filter { !$0.canCancel }
+            .sorted { $0.updatedAt < $1.updatedAt }
+        for snapshot in terminal.prefix(operationSnapshots.count - 100) {
+            operationSnapshots.removeValue(forKey: snapshot.id)
+        }
+    }
+
+    func perform(
+        _ action: LATCHAction,
+        definition: MountDefinition,
+        confirmed: Bool,
+        operationCancellation: OperationCancellationToken? = nil
+    ) async -> LATCHResponse {
+        guard !(operationCancellation?.isCancelled ?? false) else { return .accepted }
         var activeToken: MountWorkToken?
         defer {
             if let activeToken { mountWork.finishManual(activeToken) }
@@ -248,7 +393,7 @@ actor DaemonController {
             case .check:
                 let token = mountWork.beginManual(for: definition.id)
                 activeToken = token
-                let cancellation = mountCancellation(for: token)
+                let cancellation = mountCancellation(for: token, operationCancellation: operationCancellation)
                 let evaluation = await ruleEvaluation(for: definition)
                 guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
                 if let evaluation, !evaluation.isSatisfied {
@@ -288,7 +433,7 @@ actor DaemonController {
             case .mount:
                 let token = mountWork.beginManual(for: definition.id)
                 activeToken = token
-                let cancellation = mountCancellation(for: token)
+                let cancellation = mountCancellation(for: token, operationCancellation: operationCancellation)
                 let _ = await withPersistenceIgnoreError { [weak self] in
                     try await self?.stateStore.setPaused(false, for: definition.id)
                 }
@@ -339,7 +484,7 @@ actor DaemonController {
                 guard confirmed else { return .failure(.mountConflict, "Unmounting requires explicit confirmation.") }
                 let token = mountWork.beginManual(for: definition.id)
                 activeToken = token
-                let cancellation = mountCancellation(for: token)
+                let cancellation = mountCancellation(for: token, operationCancellation: operationCancellation)
                 await coordinator.waitUntilIdle()
                 guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
                 let source = try await mounts.currentSource(at: definition.mountPoint)
@@ -386,7 +531,9 @@ actor DaemonController {
                 let result = await coordinator.recover(
                     definition,
                     trigger: .manual,
-                    isCancelled: { [mountWork] in !mountWork.isCurrent(token) }
+                    isCancelled: { [mountWork, operationCancellation] in
+                        !mountWork.isCurrent(token) || operationCancellation?.isCancelled == true
+                    }
                 )
                 guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
                 if result.state == .healthy || (result.code != .none && AutomaticRetryState.disposition(after: result.code) == .clear) {
@@ -397,10 +544,15 @@ actor DaemonController {
                 guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
                 return result.state == .healthy ? .accepted : .failure(result.code, result.detail)
             case .reveal:
+                let token = mountWork.beginManual(for: definition.id)
+                activeToken = token
+                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
                 guard try await mounts.currentSource(at: definition.mountPoint) == definition.source else {
                     return .failure(.sourceMismatch, "The configured source is not mounted at this location.")
                 }
+                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
                 let response = try await agent.request(.revealManagedMount(mountPoint: definition.mountPoint))
+                guard manualWorkIsCurrent(token, definition: definition) else { return .accepted }
                 guard response == .succeeded else {
                     if case .failed(let detail) = response { return .failure(.verificationFailed, detail) }
                     return .failure(.verificationFailed, "The signed user agent could not reveal this mount.")

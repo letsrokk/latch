@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     @Published var serviceApprovalPrompt: ServiceApprovalPrompt?
     @Published var configurationImportPreview: PortableImportPreview?
     @Published var mainDestination: LATCHMainDestination = .overview
+    @Published var operationSnapshots: [UUID: OperationSnapshot] = [:]
     @Published private(set) var hasLoadedServiceStatus = false
 
     let daemonService = SMAppService.daemon(plistName: "\(LATCHIdentity.daemonIdentifier).plist")
@@ -324,6 +325,7 @@ final class AppModel: ObservableObject {
     func suspendLiveUpdates() {
         refreshTask?.cancel()
         refreshTask = nil
+        operationSnapshots.removeAll()
         stopApprovalRefreshWindow()
         statusSubscription?.cancel()
         statusSubscription = nil
