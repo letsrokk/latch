@@ -713,8 +713,8 @@ struct UIContractTests {
 
         #expect(draft.mountOptions == .recommended)
         #expect(draft.serverID != UUID())
-        #expect(draft.probeIntervalSeconds == 30)
-        #expect(draft.probeTimeoutSeconds == 3)
+        #expect(draft.probeIntervalSeconds == 10)
+        #expect(draft.probeTimeoutSeconds == 2)
         #expect(draft.recoveryCooldownSeconds == 600)
     }
 
@@ -726,8 +726,8 @@ struct UIContractTests {
             mountPoint: "/Volumes/Media/Archive"
         )
 
-        #expect(definition.probeIntervalSeconds == 30)
-        #expect(definition.probeTimeoutSeconds == 3)
+        #expect(definition.probeIntervalSeconds == 10)
+        #expect(definition.probeTimeoutSeconds == 2)
         #expect(definition.recoveryCooldownSeconds == 600)
     }
 

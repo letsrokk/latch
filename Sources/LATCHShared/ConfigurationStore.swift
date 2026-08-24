@@ -252,6 +252,7 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
     private var state: State
     private let writer: RecoveryStateWriting
     private var persistenceHealthState = PersistenceHealthSnapshot.healthy
+    private var runtimeSnapshotGeneration: UInt64 = 0
 
     public init() {
         self.init(directory: LATCHIdentity.applicationSupportDirectory, writer: nil)
@@ -302,7 +303,13 @@ public actor RecoveryStateStore: RecoveryCooldownStoring, WakeOnLANStateStoring 
     public func statuses() -> [UUID: MountStatus] { state.statuses }
     public func events() -> [LATCHEvent] { state.events }
 
-    public func setRuntime(statuses: [UUID: MountStatus], events: [LATCHEvent]) throws {
+    public func setRuntime(
+        statuses: [UUID: MountStatus],
+        events: [LATCHEvent],
+        minimumGeneration: UInt64 = 0
+    ) throws {
+        guard minimumGeneration >= runtimeSnapshotGeneration else { return }
+        runtimeSnapshotGeneration = max(runtimeSnapshotGeneration, minimumGeneration)
         try mutateState {
             $0.statuses = statuses
             $0.events = events

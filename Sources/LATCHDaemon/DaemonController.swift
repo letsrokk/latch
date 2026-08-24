@@ -56,6 +56,7 @@ actor DaemonController {
     var networkVolumesVerification: NetworkVolumesVerificationState = .notChecked
     var monitoringTask: Task<Void, Never>?
     var runtimePersistenceTask: Task<Void, Never>?
+    var runtimePersistenceGeneration: UInt64 = 0
     var operationTasks: [UUID: Task<Void, Never>] = [:]
     var operationSnapshots: [UUID: OperationSnapshot] = [:]
     var operationCancellations: [UUID: OperationCancellationToken] = [:]
@@ -187,8 +188,13 @@ actor DaemonController {
             case .getRecentEvents(let limit): return .events(Array(events.suffix(max(0, min(limit, 500)))))
             case .clearEvents:
                 cancelScheduledRuntimePersistence()
+                let generation = nextRuntimePersistenceGeneration()
                 let shouldClear = await withPersistenceIgnoreError { [weak self] in
-                    try await self?.stateStore.clearEvents()
+                    try await self?.stateStore.setRuntime(
+                        statuses: self?.statuses ?? [:],
+                        events: [],
+                        minimumGeneration: generation
+                    )
                 }
                 if shouldClear {
                     events.removeAll()

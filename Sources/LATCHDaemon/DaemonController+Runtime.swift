@@ -381,12 +381,22 @@ extension DaemonController {
     private func writeRuntimeSnapshot() async {
         let statusSnapshot = statuses
         let eventSnapshot = events
+        let generation = nextRuntimePersistenceGeneration()
         let started = DispatchTime.now().uptimeNanoseconds
         let persisted = await withPersistenceIgnoreError { [weak self] in
-            try await self?.stateStore.setRuntime(statuses: statusSnapshot, events: eventSnapshot)
+            try await self?.stateStore.setRuntime(
+                statuses: statusSnapshot,
+                events: eventSnapshot,
+                minimumGeneration: generation
+            )
         }
         let milliseconds = (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
         persistenceLogger.debug("Runtime persistence completed in \(milliseconds, privacy: .public) ms; success=\(persisted, privacy: .public)")
+    }
+
+    func nextRuntimePersistenceGeneration() -> UInt64 {
+        runtimePersistenceGeneration &+= 1
+        return runtimePersistenceGeneration
     }
 
     @discardableResult

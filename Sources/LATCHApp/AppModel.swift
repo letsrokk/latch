@@ -31,8 +31,13 @@ final class AppModel: ObservableObject {
     let agentService = SMAppService.agent(plistName: "\(LATCHIdentity.agentIdentifier).plist")
     let mainApplicationService = SMAppService.mainApp
     private var statusSubscription: StatusSubscription?
+    private var statusSubscriptionConnection: NSXPCConnection?
     private let runtimeLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier, category: "runtime-updates")
+    private let runtimePollInterval: TimeInterval = 10
+    private let runtimePollStalenessInterval: TimeInterval = 15
     private var lastRuntimeRevision: UInt64?
+    private var runtimeSubscriptionLastUpdate: Date?
+    private var shouldPollRuntime = false
     private var hasPendingMainDestination = false
     private var isMainWindowVisible = false
     private var refreshTask: Task<Void, Never>?
@@ -108,7 +113,7 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled else { return }
             await self.requestNotificationAuthorization()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(runtimePollInterval))
                 guard !Task.isCancelled else { return }
                 await self.refresh()
             }
@@ -150,10 +155,15 @@ final class AppModel: ObservableObject {
             hasLoadedServiceStatus = true
         }
         if case .configuration(let value) = try await send(.getConfiguration) { configuration = value }
-        if case .statuses(let value) = try await send(.getStatus), lastRuntimeRevision == nil { statuses = value }
+        let shouldPollRuntime = shouldPollRuntimeData()
+        if shouldPollRuntime, case .statuses(let value) = try await send(.getStatus) {
+            statuses = value
+        }
         if case .externalMounts(let value) = try await send(.getExternalMounts) { externalMounts = value }
         if case .discoveredServers(let value) = try await send(.getDiscoveredServers) { discoveredServers = value }
-        if case .events(let value) = try await send(.getRecentEvents(limit: 100)), lastRuntimeRevision == nil { events = LATCHEvent.newestFirst(value) }
+        if shouldPollRuntime, case .events(let value) = try await send(.getRecentEvents(limit: 100)) {
+            events = LATCHEvent.newestFirst(value)
+        }
         if case .operationSnapshots(let value) = try await send(.getOperations) { reconcileOperations(value) }
     }
 
@@ -340,9 +350,9 @@ final class AppModel: ObservableObject {
         serviceStatus.agentAuthorized = agentServiceState == .enabled
         if daemonServiceState != .enabled {
             serviceStatus.daemonOnline = false
+            resetRuntimePollingState()
             statusSubscription?.cancel()
             statusSubscription = nil
-            lastRuntimeRevision = nil
         }
     }
 
@@ -353,9 +363,9 @@ final class AppModel: ObservableObject {
         operationMonitorTasks.removeAll()
         operationSnapshots.removeAll()
         stopApprovalRefreshWindow()
+        resetRuntimePollingState()
         statusSubscription?.cancel()
         statusSubscription = nil
-        lastRuntimeRevision = nil
     }
 
     func send(_ request: LATCHRequest) async throws -> LATCHResponse {
@@ -369,6 +379,7 @@ final class AppModel: ObservableObject {
     private func establishStatusSubscription() {
         guard statusSubscription == nil, daemonService.status == .enabled else { return }
         let teamID = Bundle.main.object(forInfoDictionaryKey: "LATCHTeamIdentifier") as? String ?? "ADHOC"
+        shouldPollRuntime = true
         let subscription = StatusSubscription(policy: .init(teamID: teamID, bundleIdentifiers: [LATCHIdentity.daemonIdentifier])) { [weak self] update in
             switch update {
             case .statuses(let statuses):
@@ -386,14 +397,16 @@ final class AppModel: ObservableObject {
         connection.remoteObjectInterface = NSXPCInterface(with: LATCHXPCProtocol.self)
         connection.setCodeSigningRequirement(daemonSigningRequirement)
         connection.resume()
+        statusSubscriptionConnection = connection
         guard let proxy = connection.remoteObjectProxyWithErrorHandler({ [weak self] error in
             Task { @MainActor in
-                self?.statusSubscription?.cancel()
-                self?.statusSubscription = nil
-                self?.lastRuntimeRevision = nil
-                if self?.serviceSetupInProgress == false {
-                    self?.errorMessage = error.localizedDescription
+                if self?.statusSubscriptionConnection === connection { self?.statusSubscriptionConnection = nil }
+                if self?.statusSubscription != nil {
+                    self?.statusSubscription?.cancel()
+                    self?.statusSubscription = nil
+                    self?.resetRuntimePollingState()
                 }
+                if self?.serviceSetupInProgress == false { self?.errorMessage = error.localizedDescription }
                 connection.invalidate()
             }
         }) as? LATCHXPCProtocol else { connection.invalidate(); return }
@@ -408,9 +421,26 @@ final class AppModel: ObservableObject {
             after: lastRuntimeRevision
         ) else { return }
         lastRuntimeRevision = snapshot.revision
+        runtimeSubscriptionLastUpdate = Date()
+        shouldPollRuntime = false
         statuses = snapshot.statuses
         events = LATCHEvent.newestFirst(snapshot.events)
         runtimeLogger.debug("Applied runtime revision \(snapshot.revision, privacy: .public) with \(snapshot.statuses.count, privacy: .public) statuses and \(snapshot.events.count, privacy: .public) events")
+    }
+
+    private func shouldPollRuntimeData() -> Bool {
+        shouldPollRuntime = shouldPollRuntime || lastRuntimeRevision == nil
+            || runtimeSubscriptionLastUpdate == nil
+            || (runtimeSubscriptionLastUpdate?.addingTimeInterval(runtimePollStalenessInterval) ?? Date.distantPast) < Date()
+        return shouldPollRuntime
+    }
+
+    private func resetRuntimePollingState() {
+        shouldPollRuntime = true
+        lastRuntimeRevision = nil
+        runtimeSubscriptionLastUpdate = nil
+        statusSubscriptionConnection?.invalidate()
+        statusSubscriptionConnection = nil
     }
 
     var hasPendingMonitoringServiceApproval: Bool {

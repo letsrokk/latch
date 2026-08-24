@@ -23,8 +23,8 @@ public struct MountDraft: Sendable, Equatable, Identifiable {
             mountPoint: FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path,
             mountOptions: .recommended,
             enabled: true,
-            probeIntervalSeconds: 30,
-            probeTimeoutSeconds: 3,
+            probeIntervalSeconds: 10,
+            probeTimeoutSeconds: 2,
             recoveryCooldownSeconds: 600,
             recoveryDependencies: [],
             postMountActions: []

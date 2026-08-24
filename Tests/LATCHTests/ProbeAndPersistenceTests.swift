@@ -397,6 +397,32 @@ struct ProbeAndPersistenceTests {
         #expect(await reloaded.statuses() == [id: status])
     }
 
+    @Test func staleRuntimeWritesCanBeDroppedByGeneration() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID()
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let status = MountStatus(definitionID: id, observedSource: "server:/media", observedMountPoint: "/Volumes/Media/Movies", state: .healthy, lastProbe: date, lastStateChange: date, lastHealthyTime: date, lastRecoveryTime: nil, detail: "Healthy", errorCode: .none)
+        let latestEvent = LATCHEvent(date: date, mountID: id, state: .healthy, code: .none, detail: "Most recent")
+        let staleEvent = LATCHEvent(date: date.addingTimeInterval(-60), mountID: id, state: .healthy, code: .none, detail: "Stale")
+        let store = RecoveryStateStore(directory: root)
+
+        try await store.setRuntime(
+            statuses: [id: status],
+            events: [latestEvent],
+            minimumGeneration: 5
+        )
+        try await store.setRuntime(
+            statuses: [id: status],
+            events: [staleEvent],
+            minimumGeneration: 3
+        )
+
+        let reloaded = RecoveryStateStore(directory: root)
+        #expect(await reloaded.events().count == 1)
+        #expect(await reloaded.events().first == latestEvent)
+    }
+
     @Test func recoveryStateWriteFailurePreservesMountRemovalRollback() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

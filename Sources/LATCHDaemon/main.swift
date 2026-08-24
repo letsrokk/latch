@@ -98,6 +98,7 @@ private final class StatusBroadcaster: @unchecked Sendable {
     private var latestStatuses: [MountStatus] = []
     private var latestEvents: [LATCHEvent] = []
     private var hasRuntimeState = false
+    private let runtimeEventLimit = 200
 
     init(policy: ClientSigningPolicy) { self.policy = policy }
 
@@ -142,11 +143,52 @@ private final class StatusBroadcaster: @unchecked Sendable {
     }
 
     private func send(_ snapshot: LATCHRuntimeSnapshot, to connections: [NSXPCConnection]) {
-        guard let data = try? LATCHStatusSinkCodec.encodeRuntime(snapshot) else { return }
-        logger.debug("Publishing runtime revision \(snapshot.revision, privacy: .public) to \(connections.count, privacy: .public) subscribers")
-        for connection in connections {
-            (connection.remoteObjectProxy as? LATCHStatusSink)?.receiveStatus(data)
+        var payloads = [snapshot]
+        if snapshot.events.count > runtimeEventLimit {
+            payloads.append(LATCHRuntimeSnapshot(
+                revision: snapshot.revision,
+                statuses: snapshot.statuses,
+                events: Array(snapshot.events.suffix(runtimeEventLimit))
+            ))
         }
+        if snapshot.events.count > 100 {
+            payloads.append(LATCHRuntimeSnapshot(
+                revision: snapshot.revision,
+                statuses: snapshot.statuses,
+                events: Array(snapshot.events.suffix(100))
+            ))
+        }
+        if snapshot.events.count > 0 {
+            payloads.append(LATCHRuntimeSnapshot(
+                revision: snapshot.revision,
+                statuses: snapshot.statuses,
+                events: []
+            ))
+        }
+        for candidate in payloads {
+            if send(snapshot: candidate, to: connections) { return }
+        }
+        logger.notice("Unable to encode runtime revision \(snapshot.revision, privacy: .public) for \(connections.count, privacy: .public) subscribers; dropped snapshot")
+    }
+
+    @discardableResult
+    private func send(snapshot: LATCHRuntimeSnapshot, to connections: [NSXPCConnection]) -> Bool {
+        guard let data = try? LATCHStatusSinkCodec.encodeRuntime(snapshot) else {
+            logger.notice("Skipping runtime revision \(snapshot.revision, privacy: .public); snapshot too large with \(snapshot.events.count, privacy: .public) events")
+            return false
+        }
+        logger.debug("Publishing runtime revision \(snapshot.revision, privacy: .public) to \(connections.count, privacy: .public) subscribers")
+        if connections.isEmpty { return true }
+        var validConnectionCount = 0
+        for connection in connections {
+            guard let sink = connection.remoteObjectProxy as? LATCHStatusSink else { continue }
+            sink.receiveStatus(data)
+            validConnectionCount += 1
+        }
+        if validConnectionCount < connections.count {
+            logger.error("Dropped runtime publish to one or more stale subscribers.")
+        }
+        return true
     }
 
     private func send(_ snapshot: LATCHRuntimeSnapshot, to connection: NSXPCConnection) {
