@@ -4,6 +4,32 @@ import Testing
 
 @Suite("Redacted diagnostics")
 struct DiagnosticsTests {
+    @Test func publicTelemetrySummaryOmitsCommandPayloadsAndPaths() {
+        let error = SystemCommandError(
+            executable: "/sbin/mount",
+            status: 1,
+            detail: "can't mount nas.private:/secret on /Users/alice/Media"
+        )
+
+        let summary = TelemetryErrorPresentation.publicSummary(for: error)
+
+        #expect(summary == "mount failed with exit status 1.")
+        #expect(!summary.contains("nas.private"))
+        #expect(!summary.contains("/secret"))
+        #expect(!summary.contains("/Users/alice"))
+
+        let genericSummary = TelemetryErrorPresentation.publicSummary(
+            for: NSError(domain: "/Users/alice/Library/PrivateState", code: 17)
+        )
+        #expect(genericSummary == "Operation failed with error code 17.")
+        #expect(!genericSummary.contains("alice"))
+
+        let probeSummary = ProbeTelemetryPresentation.publicSummary(
+            for: ProbeResult(metadataErrno: EIO, failedOperation: .metadata)
+        )
+        #expect(probeSummary == "probeError/verificationFailed")
+    }
+
     @Test func exportOmitsPrivateLocalPathsAndDependencyHints() throws {
         let dependency = RecoveryDependency(kind: .dockerContainer(.init(
             containerName: "radarr",

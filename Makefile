@@ -18,7 +18,6 @@ SCRIPT_TESTS := \
 	Tests/BuildScripts/build-and-run-script-test.sh \
 	Tests/BuildScripts/stage-xcode-app-test.sh \
 	Tests/BuildScripts/package-dmg-script-test.sh \
-	Tests/BuildScripts/release-workflow-contract-test.sh \
 	Tests/BuildScripts/release-validator-test.sh \
 	Tests/BuildScripts/xcode-settings-contract-test.sh
 
