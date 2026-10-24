@@ -5,6 +5,42 @@ import Testing
 
 @Suite("Probe classification and persistence")
 struct ProbeAndPersistenceTests {
+    @Test func nfsstatUsesCurrentParametersAndNeverOriginalRequestedOptions() throws {
+        let parsed = NFSStatMountParser.optionsByMount(from: """
+        /Volumes/Media/My Share from nas.local:/media
+          -- Original mount options:
+             NFS parameters: vers=4.1,tcp,rsize=131072,wsize=131072
+          -- Current mount parameters:
+             General mount flags: nosuid,nodev
+             NFS parameters: vers=4.0,proto=tcp6,port=2049,rsize=65536,
+                 wsize=32768,principal=private@example.test
+             File system locations: /media @ nas.local
+        /Volumes/Other from other.local:/other
+          -- Original mount options:
+             NFS parameters: vers=3,rsize=131072
+        /Volumes/Exact from nas.local:/exact
+          -- Current mount parameters:
+             NFS parameters: vers=4.1,tcp,rsize=131072,wsize=131072
+        """)
+        let key = MountOutputParser.key(source: "nas.local:/media", mountPoint: "/Volumes/Media/My Share")
+        let observed = NFSObservedOptions(options: parsed[key] ?? [])
+        #expect(observed.version == "4.0")
+        #expect(observed.transport == "tcp")
+        #expect(observed.readSizeBytes == 65536)
+        #expect(observed.writeSizeBytes == 32768)
+        #expect(parsed.count == 2)
+        #expect(!(parsed[key] ?? []).contains(where: { $0.contains("principal") }))
+        #expect(throws: NFSVersionVerificationError.self) { try observed.verifyRequestedVersion("4.1") }
+        try observed.verifyRequestedVersion("4.0")
+        try observed.verifyRequestedVersion(nil)
+        #expect(throws: NFSVersionVerificationError.self) {
+            try NFSObservedOptions(options: []).verifyRequestedVersion("4.1")
+        }
+        let exact = NFSObservedOptions(options: parsed[MountOutputParser.key(source: "nas.local:/exact", mountPoint: "/Volumes/Exact")] ?? [])
+        #expect(exact.version == "4.1")
+        try exact.verifyRequestedVersion("4.1")
+    }
+
     @Test func parsesEffectiveNFSOptionsFromMountOutput() {
         let parsed = MountOutputParser.optionsByMount(from: """
         /dev/disk3s1 on /System/Volumes/Data (apfs, local, journaled)

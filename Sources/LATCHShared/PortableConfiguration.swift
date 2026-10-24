@@ -9,7 +9,7 @@ public struct PortableConfigurationDocument: Codable, Sendable, Equatable {
     public var servers: [NFSServerProfile]
     public var mounts: [MountDefinition]
 
-    public init(formatVersion: Int = PortableConfigurationCodec.currentFormatVersion, configurationSchemaVersion: Int = 2, servers: [NFSServerProfile], mounts: [MountDefinition]) {
+    public init(formatVersion: Int = PortableConfigurationCodec.currentFormatVersion, configurationSchemaVersion: Int = 3, servers: [NFSServerProfile], mounts: [MountDefinition]) {
         self.formatVersion = formatVersion
         self.configurationSchemaVersion = configurationSchemaVersion
         self.servers = servers
@@ -51,7 +51,7 @@ public enum PortableConfigurationCodec {
     public static let maximumItems = 1_000
 
     public static func export(_ configuration: LATCHConfiguration) throws -> Data {
-        guard configuration.schemaVersion == 2 else { throw PortableConfigurationError.unsupportedConfigurationSchema }
+        guard configuration.schemaVersion == 3 else { throw PortableConfigurationError.unsupportedConfigurationSchema }
         let document = PortableConfigurationDocument(
             servers: configuration.servers.sorted { $0.id.uuidString < $1.id.uuidString },
             mounts: configuration.mounts.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -66,11 +66,13 @@ public enum PortableConfigurationCodec {
     public static func decode(_ data: Data) throws -> PortableConfigurationDocument {
         guard data.count <= maximumBytes else { throw PortableConfigurationError.oversized }
         try StrictPortableConfigurationJSON.validate(data)
-        let document: PortableConfigurationDocument
+        var document: PortableConfigurationDocument
         do { document = try JSONDecoder().decode(PortableConfigurationDocument.self, from: data) }
         catch { throw PortableConfigurationError.malformed }
         guard document.formatVersion == currentFormatVersion else { throw PortableConfigurationError.unsupportedFormatVersion }
-        guard document.configurationSchemaVersion == 2 else { throw PortableConfigurationError.unsupportedConfigurationSchema }
+        guard [2, 3].contains(document.configurationSchemaVersion) else { throw PortableConfigurationError.unsupportedConfigurationSchema }
+        document.configurationSchemaVersion = 3
+        for mount in document.mounts { try mount.mountOptions.validate() }
         try validateTransport(data, document: document)
         return document
     }
@@ -303,6 +305,7 @@ private enum StrictPortableConfigurationJSON {
             _ = try object(options, allowed: [
                 "readOnly", "reservedPort", "requireTCP", "interruptible", "disableLocking", "hideFromFinder",
                 "noExecutableFiles", "ignoreSetuid", "ignoreDeviceFiles",
+                "nfsVersion", "readSizeBytes", "writeSizeBytes", "additionalMountOptions",
             ])
         }
         for dependency in try array(mount["recoveryDependencies"]) { try validateDependency(dependency) }

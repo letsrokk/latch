@@ -41,7 +41,9 @@ struct MainWindowView: View {
             storedDestination = destination.rawValue
         }
         .sheet(item: $draft) { value in
-            MountEditorView(draft: value, servers: model.configuration.servers, initialServer: templateServer) { saved, server in
+            MountEditorView(draft: value, servers: model.configuration.servers, initialServer: templateServer, status: model.statuses.first { $0.definitionID == value.id }, applyAndRemount: { saved in
+                await model.applyAndRemount(saved)
+            }) { saved, server in
                 await model.save(saved, creating: server)
             }
         }
@@ -338,6 +340,8 @@ struct MountEditorView: View {
     @State var draft: MountDraft
     let servers: [NFSServerProfile]
     let initialServer: NFSServerProfile?
+    let status: MountStatus?
+    let applyAndRemount: (MountDraft) async -> MountEditorSaveResult
     let save: (MountDraft, NFSServerProfile?) async -> MountEditorSaveResult
     @Environment(\.dismiss) private var dismiss
     @State private var showReset = false
@@ -351,6 +355,7 @@ struct MountEditorView: View {
     @State private var submissionError: String?
     @State private var connectionWasEdited = false
     private let isNew: Bool
+    private let original: MountDraft
 
     private let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
 
@@ -371,7 +376,24 @@ struct MountEditorView: View {
         let serverPath = draft.exportPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !serverPath.hasPrefix("/") { messages.append("Enter an absolute server path beginning with /.") }
         if !mountTargetConfirmed { messages.append("Choose an existing empty mount folder.") }
+        if let optionsError { messages.append(optionsError) }
         return messages
+    }
+
+    private var optionsError: String? {
+        do {
+            try draft.mountOptions.validate()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private var canApplyAndRemount: Bool {
+        !isNew && status?.observedSource != nil
+            && draft.serverID == original.serverID
+            && draft.exportPath == original.exportPath
+            && draft.mountPoint == original.mountPoint
     }
 
     private var recoveryCooldownMinutes: Binding<Int> {
@@ -381,11 +403,14 @@ struct MountEditorView: View {
         )
     }
 
-    init(draft: MountDraft, servers: [NFSServerProfile], initialServer: NFSServerProfile? = nil, save: @escaping (MountDraft, NFSServerProfile?) async -> MountEditorSaveResult) {
+    init(draft: MountDraft, servers: [NFSServerProfile], initialServer: NFSServerProfile? = nil, status: MountStatus? = nil, applyAndRemount: @escaping (MountDraft) async -> MountEditorSaveResult, save: @escaping (MountDraft, NFSServerProfile?) async -> MountEditorSaveResult) {
         _draft = State(initialValue: draft)
         self.servers = servers
         self.initialServer = initialServer
+        self.status = status
+        self.applyAndRemount = applyAndRemount
         self.save = save
+        original = draft
         isNew = draft.displayName.isEmpty
         _mountTargetConfirmed = State(initialValue: !isNew)
         _folderSelectionError = State(initialValue: nil)
@@ -468,6 +493,13 @@ struct MountEditorView: View {
 
                 Section {
                     FormDisclosureSection("Advanced NFS Options", isExpanded: $optionsExpanded) {
+                        Picker("NFS version", selection: $draft.mountOptions.nfsVersion) {
+                            Text("Automatic").tag(String?.none)
+                            ForEach(["3", "4.0", "4.1"], id: \.self) { version in
+                                Text(version).tag(Optional(version)).disabled(!NFSOptions.supportsVersion(version))
+                            }
+                        }
+                        FieldHint("Automatic follows macOS’s normal protocol selection and may not choose the newest version. An explicit version must be verified and will not silently fall back. Unavailable versions are unsupported by this macOS NFS client.")
                         ForEach(NFSOptions.controls) { control in
                             VStack(alignment: .leading, spacing: 3) {
                                 Toggle(control.title, isOn: Binding(get: { draft.mountOptions[control.key] }, set: { draft.mountOptions[control.key] = $0 }))
@@ -475,6 +507,19 @@ struct MountEditorView: View {
                                 Text(control.hint).font(.caption).foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 2)
+                        }
+                        nfsConfigurationFields
+                        if optionsError == nil {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Effective mount options").fontWeight(.medium)
+                                Text(draft.mountOptions.encoded)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                FieldHint("Requested configuration; negotiated runtime values may differ. Validation does not prove macOS will honor additional options.")
+                            }
+                        }
+                        if status?.observedSource != nil {
+                            mountedNFSConfiguration
                         }
                         Button("Reset to Recommended Defaults…") { showReset = true }
                     }
@@ -522,6 +567,13 @@ struct MountEditorView: View {
 
             Divider()
 
+            if !isNew {
+                Text("Save Changes stores settings for the next mount. Applying them to the current mount requires a remount. Apply and Remount pauses configured dependencies and attempts to restore the previous configuration on failure.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+            }
             HStack {
                 if let submissionError {
                     Label(submissionError, systemImage: "exclamationmark.circle.fill")
@@ -532,18 +584,15 @@ struct MountEditorView: View {
                 }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(isSaving)
-                Button {
-                    Task {
-                        isSaving = true
-                        submissionError = nil
-                        switch await save(draft, initialServer) {
-                        case .saved:
-                            dismiss()
-                        case .failed(let detail):
-                            submissionError = detail
-                        }
-                        isSaving = false
+                if !isNew {
+                    Button("Apply and Remount") {
+                        Task { await submit(remount: true) }
                     }
+                    .disabled(!validationMessages.isEmpty || isSaving || !canApplyAndRemount)
+                    .help("Requires a mounted share and unchanged server, server path, and mount folder.")
+                }
+                Button {
+                    Task { await submit(remount: false) }
                 } label: {
                     if isSaving { ProgressView().controlSize(.small) } else { Text(EditorPrimaryActionTitle.title(isNew: isNew)) }
                 }
@@ -555,16 +604,97 @@ struct MountEditorView: View {
         }
         .frame(width: 660, height: 520)
         .confirmationDialog("Reset NFS options?", isPresented: $showReset) {
-            Button("Apply \(draft.mountOptions.changesToRecommended().count) Changes", role: .destructive) { draft.mountOptions = .recommended }
+            Button("Reset Options", role: .destructive) { draft.mountOptions = .recommended }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(draft.mountOptions.changesToRecommended().map { "\($0.key.rawValue): \($0.from ? "On" : "Off") → \($0.to ? "On" : "Off")" }.joined(separator: "\n"))
+            Text("Reset all option toggles, use Automatic NFS version and Default request sizes, and clear Additional mount options.")
         }
         .alert("Choose Another Folder", isPresented: Binding(get: { folderSelectionError != nil }, set: { if !$0 { folderSelectionError = nil } })) {
             Button("OK") { folderSelectionError = nil }
         } message: {
             Text(folderSelectionError ?? "")
         }
+    }
+
+    private var nfsConfigurationFields: some View {
+        Group {
+            transferSizePicker("Read request size", selection: $draft.mountOptions.readSizeBytes)
+            transferSizePicker("Write request size", selection: $draft.mountOptions.writeSizeBytes)
+            FieldHint("These are requested sizes; negotiated sizes may differ. Larger sizes do not always improve performance. This client supports sizes up to \(sizeLabel(NFSOptions.maximumTransferSize)).")
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Additional mount options")
+                TextEditor(text: $draft.mountOptions.additionalMountOptions)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 58, maxHeight: 100)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
+                    .accessibilityLabel("Additional mount options")
+                if let optionsError { ValidationMessage(optionsError) }
+                FieldHint("Enter comma-separated options only, such as readahead=32,acregmax=30. Do not enter -o, a command, server address, or mount path. Unsupported options can cause mounting to fail.")
+            }
+        }
+    }
+
+    private func transferSizePicker(_ title: String, selection: Binding<Int?>) -> some View {
+        Picker(title, selection: selection) {
+            Text("Default").tag(Int?.none)
+            ForEach(NFSOptions.transferSizes, id: \.self) { size in
+                Text(sizeLabel(size)).tag(Optional(size)).disabled(size > NFSOptions.maximumTransferSize)
+            }
+        }
+    }
+
+    private var mountedNFSConfiguration: some View {
+        let observed = NFSObservedOptions(options: status?.observedMountOptions ?? [])
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Current mount").fontWeight(.medium)
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
+                GridRow {
+                    Text("Setting")
+                    Text("Requested (saved)")
+                    Text("Observed")
+                }.fontWeight(.medium)
+                GridRow {
+                    Text("NFS version")
+                    Text(original.mountOptions.nfsVersion ?? "Automatic")
+                    Text(observed.version ?? "Unknown")
+                }
+                GridRow {
+                    Text("Transport")
+                    Text(original.mountOptions.requireTCP ? "TCP" : "Automatic")
+                    Text(observed.transport?.uppercased() ?? "Unknown")
+                }
+                GridRow {
+                    Text("Read request size")
+                    Text(original.mountOptions.readSizeBytes.map(sizeLabel) ?? "Default")
+                    Text(observed.readSizeBytes.map(sizeLabel) ?? "Unknown")
+                }
+                GridRow {
+                    Text("Write request size")
+                    Text(original.mountOptions.writeSizeBytes.map(sizeLabel) ?? "Default")
+                    Text(observed.writeSizeBytes.map(sizeLabel) ?? "Unknown")
+                }
+            }
+            .font(.caption)
+            if let requested = original.mountOptions.nfsVersion, let actual = observed.version, requested != actual {
+                ValidationMessage("Protocol mismatch: requested NFS \(requested), observed NFS \(actual). Remount or recover this share before using it.")
+            }
+            FieldHint("Observed values come from macOS NFS mount information. Unknown means the value is unavailable.")
+        }
+    }
+
+    private func sizeLabel(_ bytes: Int) -> String {
+        bytes >= 1_048_576 ? "\(bytes / 1_048_576) MiB" : "\(bytes / 1024) KiB"
+    }
+
+    private func submit(remount: Bool) async {
+        isSaving = true
+        submissionError = nil
+        let result = if remount { await applyAndRemount(draft) } else { await save(draft, initialServer) }
+        switch result {
+        case .saved: dismiss()
+        case .failed(let detail): submissionError = detail
+        }
+        isSaving = false
     }
 
     private func chooseMountFolder() {

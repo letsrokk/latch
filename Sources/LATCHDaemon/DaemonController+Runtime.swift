@@ -373,6 +373,7 @@ extension DaemonController {
     }
 
     func record(_ status: MountStatus) async {
+        let status = observedStatus(status, snapshots: (try? table.snapshots()) ?? [])
         let old = statuses[status.id]
         statuses[status.id] = status
         onStatusesChanged(Array(statuses.values))
@@ -393,6 +394,16 @@ extension DaemonController {
         } else {
             scheduleRuntimePersistence()
         }
+    }
+
+    func observedStatus(_ status: MountStatus, snapshots: [ExternalMountSnapshot]) -> MountStatus {
+        var status = status
+        status.observedMountOptions = snapshots.first {
+            $0.source == status.observedSource && $0.mountPoint == status.observedMountPoint
+        }?.options.filter { option in
+            ["vers=", "proto=", "rsize=", "wsize="].contains { option.hasPrefix($0) }
+        } ?? []
+        return status
     }
 
     func appendEvent(_ event: LATCHEvent) {

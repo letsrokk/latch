@@ -64,6 +64,7 @@ public protocol MountOperating: Sendable {
     func networkAvailable(for host: String) async -> Bool
     func currentSource(at mountPoint: String) async throws -> String?
     func forceUnmount(_ mountPoint: String, expectedSource: String, cancellation: MountOperationCancellation) async throws
+    func unmount(_ mountPoint: String, expectedSource: String, cancellation: MountOperationCancellation) async throws
     func validateEmptyMountPoint(_ mountPoint: String, cancellation: MountOperationCancellation) async throws
     func mount(_ definition: MountDefinition, cancellation: MountOperationCancellation) async throws
     func verifySource(_ source: String, at mountPoint: String, cancellation: MountOperationCancellation) async throws
@@ -71,6 +72,10 @@ public protocol MountOperating: Sendable {
 }
 
 public extension MountOperating {
+    func unmount(_ mountPoint: String, expectedSource: String, cancellation: MountOperationCancellation) async throws {
+        throw POSIXError(.ENOTSUP)
+    }
+
     func forceUnmount(_ mountPoint: String, expectedSource: String) async throws {
         try await forceUnmount(mountPoint, expectedSource: expectedSource, cancellation: .never)
     }
@@ -280,6 +285,94 @@ public actor RecoveryCoordinator {
         } catch {
             return .init(state: .failedClosed, code: .remountFailed, detail: "Recovery failed after dependencies stopped; they remain stopped to prevent local writes.", didAttemptRecovery: true)
         }
+    }
+
+    public func apply(
+        previous: MountDefinition,
+        candidate: MountDefinition,
+        commit: @Sendable () async throws -> Void
+    ) async -> RecoveryResult {
+        guard !recoveryDisabled, !recoveryInProgress else {
+            return .init(state: .cooldown, code: .mountConflict, detail: "Another recovery is active; try applying again after it finishes.", didAttemptRecovery: false)
+        }
+        recoveryInProgress = true
+        defer { recoveryInProgress = false }
+        guard previous.id == candidate.id, previous.source == candidate.source, previous.mountPoint == candidate.mountPoint else {
+            return .init(state: .probeError, code: .sourceMismatch, detail: "Save server, export, or mount-folder changes separately before applying NFS options.", didAttemptRecovery: false)
+        }
+        do {
+            try candidate.mountOptions.validate()
+            guard await permissionGate() else {
+                return .init(state: .probeError, code: .tccDenied, detail: "Verify Network Volumes access before applying NFS options.", didAttemptRecovery: false)
+            }
+            guard try await mounts.currentSource(at: previous.mountPoint) == previous.source else {
+                return .init(state: .probeError, code: .sourceMismatch, detail: "The previous configured source must be mounted before applying NFS options.", didAttemptRecovery: false)
+            }
+        } catch {
+            return .init(state: .probeError, code: .verificationFailed, detail: "Apply validation failed: \(error.localizedDescription)", didAttemptRecovery: false)
+        }
+
+        var running: [RecoveryDependency] = []
+        do {
+            for dependency in previous.recoveryDependencies where dependency.enabled {
+                try await dependencies.prepare(dependency)
+                if try await dependencies.isRunning(dependency) { running.append(dependency) }
+            }
+        } catch {
+            return .init(state: .probeError, code: .dependencyUnavailable, detail: "Dependency state or restart capability is unavailable; the mount was not changed.", didAttemptRecovery: false)
+        }
+        var stopped: [RecoveryDependency] = []
+        for dependency in running {
+            do {
+                try await dependencies.stop(dependency)
+                stopped.append(dependency)
+            } catch {
+                return await resultAfterUncertainStopFailure(dependency, previouslyStopped: stopped, isCancelled: { false })
+            }
+        }
+
+        var candidateAttempted = false
+        do {
+            try await mounts.unmount(previous.mountPoint, expectedSource: previous.source, cancellation: .never)
+            candidateAttempted = true
+            try await mountAndProbe(candidate)
+            try await commit()
+        } catch {
+            let applyFailure = error.localizedDescription
+            do {
+                if let source = try await mounts.currentSource(at: previous.mountPoint) {
+                    guard source == previous.source else { throw RecoveryFailure.probeFailed }
+                    if candidateAttempted {
+                        try await mounts.unmount(previous.mountPoint, expectedSource: previous.source, cancellation: .never)
+                        try await mountAndProbe(previous)
+                    } else {
+                        try await mounts.verifySource(previous.source, at: previous.mountPoint)
+                        guard ProbeClassifier.classify(await mounts.probe(previous)).state == .healthy else { throw RecoveryFailure.probeFailed }
+                    }
+                } else {
+                    try await mountAndProbe(previous)
+                }
+            } catch {
+                return .init(state: .failedClosed, code: .remountFailed, detail: "Applying NFS options failed: \(applyFailure). Restoring the previous configuration also failed. Dependencies remain paused. Restore the previous mount and verify access before restarting them.", didAttemptRecovery: true)
+            }
+            switch await restartAndVerify(stopped, cancellation: .never) {
+            case .success:
+                return .init(state: .healthy, code: .remountFailed, detail: "Applying NFS options failed: \(applyFailure). The previous configuration was restored and verified; paused dependencies were resumed.", didAttemptRecovery: true)
+            case .failed, .cancelled:
+                return .init(state: .failedClosed, code: .verificationFailed, detail: "Applying NFS options failed: \(applyFailure). The previous mount was restored and verified, but dependency restoration failed. Check the dependencies before restarting them.", didAttemptRecovery: true)
+            }
+        }
+        switch await restartAndVerify(stopped, cancellation: .never) {
+        case .success:
+            return .init(state: .healthy, code: .none, detail: "NFS options were applied, verified, and saved; paused dependencies were resumed.", didAttemptRecovery: true)
+        case .failed, .cancelled:
+            return .init(state: .failedClosed, code: .verificationFailed, detail: "NFS options were applied, verified, and saved, but dependency restoration failed. Check the dependencies before restarting them.", didAttemptRecovery: true)
+        }
+    }
+
+    private func mountAndProbe(_ definition: MountDefinition) async throws {
+        try await GuardedMountExecutor(mounts: mounts).mount(definition, cancellation: .never)
+        guard ProbeClassifier.classify(await mounts.probe(definition)).state == .healthy else { throw RecoveryFailure.probeFailed }
     }
 
     public func disableAndWaitUntilIdle() async {

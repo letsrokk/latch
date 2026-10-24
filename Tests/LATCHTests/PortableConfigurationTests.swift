@@ -4,6 +4,28 @@ import Testing
 
 @Suite("Portable configuration")
 struct PortableConfigurationTests {
+    @Test func nfsOptionsSurvivePortableRoundTripAndLegacyImport() throws {
+        let server = NFSServerProfile(name: "NAS", hostname: "nas.local")
+        var mount = MountDefinition(displayName: "Media", serverID: server.id, exportPath: "/media", mountPoint: "/Volumes/Media/Test")
+        mount.mountOptions.nfsVersion = "3"
+        mount.mountOptions.readSizeBytes = 131072
+        mount.mountOptions.writeSizeBytes = 131072
+        mount.mountOptions.additionalMountOptions = " readahead=32,acregmax=30 "
+        let configuration = LATCHConfiguration(servers: [server], mounts: [mount])
+        let exported = try PortableConfigurationCodec.export(configuration)
+        #expect(try PortableConfigurationCodec.decode(exported).configuration == configuration)
+        var legacy = try JSONSerialization.jsonObject(with: exported) as! [String: Any]
+        legacy["configurationSchemaVersion"] = 2
+        #expect(try PortableConfigurationCodec.decode(JSONSerialization.data(withJSONObject: legacy)).configuration.schemaVersion == 3)
+        legacy["configurationSchemaVersion"] = 99
+        #expect(throws: PortableConfigurationError.unsupportedConfigurationSchema) {
+            try PortableConfigurationCodec.decode(JSONSerialization.data(withJSONObject: legacy))
+        }
+        mount.mountOptions.additionalMountOptions = "nfsvers=3"
+        let invalidDocument = PortableConfigurationDocument(servers: [server], mounts: [mount])
+        #expect(throws: NFSOptionsValidationError.self) { try PortableConfigurationCodec.decode(JSONEncoder().encode(invalidDocument)) }
+    }
+
     @Test func exportIsVersionedDeterministicAndContainsOnlyPortableConfiguration() throws {
         let server = NFSServerProfile(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, name: "NAS", hostname: "nas.local")
         let mount = MountDefinition(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, displayName: "Music", serverID: server.id, exportPath: "/music", mountPoint: "/Volumes/Media/Music")
@@ -15,7 +37,7 @@ struct PortableConfigurationTests {
 
         #expect(first == second)
         #expect(document["formatVersion"] as? Int == 1)
-        #expect(document["configurationSchemaVersion"] as? Int == 2)
+        #expect(document["configurationSchemaVersion"] as? Int == 3)
         #expect(document["servers"] != nil)
         #expect(document["mounts"] != nil)
         #expect(document["statuses"] == nil)

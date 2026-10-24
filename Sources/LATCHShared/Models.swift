@@ -5,7 +5,7 @@ public struct LATCHConfiguration: Codable, Sendable, Equatable {
     public var servers: [NFSServerProfile]
     public var mounts: [MountDefinition]
 
-    public init(schemaVersion: Int = 2, servers: [NFSServerProfile] = [], mounts: [MountDefinition] = []) {
+    public init(schemaVersion: Int = 3, servers: [NFSServerProfile] = [], mounts: [MountDefinition] = []) {
         self.schemaVersion = schemaVersion
         self.servers = servers
         self.mounts = mounts
@@ -397,6 +397,7 @@ public struct MountStatus: Codable, Sendable, Equatable, Identifiable {
     public var definitionID: UUID
     public var observedSource: String?
     public var observedMountPoint: String
+    public var observedMountOptions: [String]
     public var state: MountState
     public var lastProbe: Date?
     public var lastStateChange: Date
@@ -408,9 +409,10 @@ public struct MountStatus: Codable, Sendable, Equatable, Identifiable {
     public var unmetRuleSummaries: [String]
     public var id: UUID { definitionID }
 
-    public init(definitionID: UUID, observedSource: String?, observedMountPoint: String, state: MountState, lastProbe: Date?, lastStateChange: Date, lastHealthyTime: Date?, lastRecoveryTime: Date?, detail: String, errorCode: LATCHErrorCode, nextAutomaticAttempt: Date? = nil, unmetRuleSummaries: [String] = []) {
+    public init(definitionID: UUID, observedSource: String?, observedMountPoint: String, state: MountState, lastProbe: Date?, lastStateChange: Date, lastHealthyTime: Date?, lastRecoveryTime: Date?, detail: String, errorCode: LATCHErrorCode, nextAutomaticAttempt: Date? = nil, unmetRuleSummaries: [String] = [], observedMountOptions: [String] = []) {
         self.definitionID = definitionID
         self.observedSource = observedSource
+        self.observedMountOptions = observedMountOptions
         self.observedMountPoint = observedMountPoint
         self.state = state
         self.lastProbe = lastProbe
@@ -424,7 +426,7 @@ public struct MountStatus: Codable, Sendable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case definitionID, observedSource, observedMountPoint, state, lastProbe, lastStateChange, lastHealthyTime, lastRecoveryTime, detail, errorCode, nextAutomaticAttempt, unmetRuleSummaries
+        case definitionID, observedSource, observedMountPoint, observedMountOptions, state, lastProbe, lastStateChange, lastHealthyTime, lastRecoveryTime, detail, errorCode, nextAutomaticAttempt, unmetRuleSummaries
     }
 
     public init(from decoder: Decoder) throws {
@@ -432,6 +434,7 @@ public struct MountStatus: Codable, Sendable, Equatable, Identifiable {
         definitionID = try values.decode(UUID.self, forKey: .definitionID)
         observedSource = try values.decodeIfPresent(String.self, forKey: .observedSource)
         observedMountPoint = try values.decode(String.self, forKey: .observedMountPoint)
+        observedMountOptions = try values.decodeIfPresent([String].self, forKey: .observedMountOptions) ?? []
         state = try values.decode(MountState.self, forKey: .state)
         lastProbe = try values.decodeIfPresent(Date.self, forKey: .lastProbe)
         lastStateChange = try values.decode(Date.self, forKey: .lastStateChange)
@@ -448,6 +451,7 @@ public struct MountStatus: Codable, Sendable, Equatable, Identifiable {
         try values.encode(definitionID, forKey: .definitionID)
         try values.encodeIfPresent(observedSource, forKey: .observedSource)
         try values.encode(observedMountPoint, forKey: .observedMountPoint)
+        try values.encode(observedMountOptions, forKey: .observedMountOptions)
         try values.encode(state, forKey: .state)
         try values.encodeIfPresent(lastProbe, forKey: .lastProbe)
         try values.encode(lastStateChange, forKey: .lastStateChange)

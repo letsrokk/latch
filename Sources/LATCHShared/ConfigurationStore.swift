@@ -56,10 +56,12 @@ private let persistenceLogger = Logger(subsystem: LATCHIdentity.bundleIdentifier
 public struct ConfigurationStartupLoad: Sendable, Equatable {
     public let configuration: LATCHConfiguration
     public let persistenceHealth: PersistenceHealthSnapshot
+    public let configurationError: String?
 
-    public init(configuration: LATCHConfiguration, persistenceHealth: PersistenceHealthSnapshot) {
+    public init(configuration: LATCHConfiguration, persistenceHealth: PersistenceHealthSnapshot, configurationError: String? = nil) {
         self.configuration = configuration
         self.persistenceHealth = persistenceHealth
+        self.configurationError = configurationError
     }
 }
 
@@ -80,6 +82,8 @@ public struct ConfigurationStore: Sendable {
     public func load() throws -> LATCHConfiguration {
         do {
             return try loadConfiguration(from: configurationURL)
+        } catch ConfigurationValidationError.unsupportedSchemaVersion {
+            throw ConfigurationValidationError.unsupportedSchemaVersion
         } catch {
             return try loadConfiguration(from: lastKnownGoodURL)
         }
@@ -101,6 +105,9 @@ public struct ConfigurationStore: Sendable {
                 )
             } catch {
                 let primaryError = error
+                if error as? ConfigurationValidationError == .unsupportedSchemaVersion {
+                    return ConfigurationStartupLoad(configuration: LATCHConfiguration(), persistenceHealth: degradedHealth(for: error), configurationError: error.localizedDescription)
+                }
                 quarantine(configurationURL, label: "config")
                 if backupExists, let backup = try? loadConfiguration(from: lastKnownGoodURL) {
                     return ConfigurationStartupLoad(
@@ -127,6 +134,9 @@ public struct ConfigurationStore: Sendable {
                 )
             )
         } catch {
+            if error as? ConfigurationValidationError == .unsupportedSchemaVersion {
+                return ConfigurationStartupLoad(configuration: LATCHConfiguration(), persistenceHealth: degradedHealth(for: error), configurationError: error.localizedDescription)
+            }
             quarantine(lastKnownGoodURL, label: "config.last-known-good")
             return ConfigurationStartupLoad(
                 configuration: LATCHConfiguration(),
@@ -164,7 +174,7 @@ public struct ConfigurationStore: Sendable {
         let configuration = try decodeAndValidate(data)
         let decoder = JSONDecoder()
         let version = try decoder.decode(SchemaVersion.self, from: data).schemaVersion
-        if version == 1 { try writeMigration(configuration, legacyData: data) }
+        if version < 3 { try writeMigration(configuration, legacyData: version == 1 ? data : nil) }
         return configuration
     }
 
@@ -173,7 +183,11 @@ public struct ConfigurationStore: Sendable {
         let version = try decoder.decode(SchemaVersion.self, from: data).schemaVersion
         let configuration: LATCHConfiguration
         switch version {
-        case 2: configuration = try decoder.decode(LATCHConfiguration.self, from: data)
+        case 3: configuration = try decoder.decode(LATCHConfiguration.self, from: data)
+        case 2:
+            var migrated = try decoder.decode(LATCHConfiguration.self, from: data)
+            migrated.schemaVersion = 3
+            configuration = migrated
         case 1: configuration = try migrate(try decoder.decode(LegacyConfiguration.self, from: data))
         default: throw ConfigurationValidationError.unsupportedSchemaVersion
         }
@@ -198,10 +212,10 @@ public struct ConfigurationStore: Sendable {
         return .init(servers: servers, mounts: mounts)
     }
 
-    private func writeMigration(_ configuration: LATCHConfiguration, legacyData: Data) throws {
+    private func writeMigration(_ configuration: LATCHConfiguration, legacyData: Data?) throws {
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        if !manager.fileExists(atPath: schema1RollbackURL.path) {
+        if let legacyData, !manager.fileExists(atPath: schema1RollbackURL.path) {
             try legacyData.write(to: schema1RollbackURL, options: [.atomic])
             _ = chmod(schema1RollbackURL.path, mode_t(0o600))
         }
@@ -215,7 +229,7 @@ public struct ConfigurationStore: Sendable {
     }
 
     public func save(_ configuration: LATCHConfiguration) throws {
-        guard configuration.schemaVersion == 2 else { throw ConfigurationValidationError.unsupportedSchemaVersion }
+        guard configuration.schemaVersion == 3 else { throw ConfigurationValidationError.unsupportedSchemaVersion }
         try ConfigurationValidator().validate(configuration, liveMounts: [])
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])

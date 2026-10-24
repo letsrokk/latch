@@ -66,10 +66,15 @@ struct EditorWorkflowTests {
     }
 
     @Test func editingPreservesPersistedMountOptions() {
-        let saved = NFSOptions(readOnly: true, reservedPort: false, requireTCP: false, interruptible: false, disableLocking: true, hideFromFinder: false, noExecutableFiles: true, ignoreSetuid: false, ignoreDeviceFiles: false)
+        var saved = NFSOptions(readOnly: true, reservedPort: false, requireTCP: false, interruptible: false, disableLocking: true, hideFromFinder: false, noExecutableFiles: true, ignoreSetuid: false, ignoreDeviceFiles: false)
+        saved.nfsVersion = "4.1"
+        saved.readSizeBytes = 131072
+        saved.writeSizeBytes = 131072
+        saved.additionalMountOptions = " readahead=32, acregmax=30 "
         let definition = MountDefinition(displayName: "Archive", host: "server.local", exportPath: "/archive", mountPoint: "/Volumes/Media/Archive", mountOptions: saved)
 
         #expect(MountDraft(editing: definition).mountOptions == saved)
+        #expect(MountDraft(editing: definition).definition().mountOptions == saved)
     }
 
     @Test func editingPreservesPersistedMonitoringIntervals() {

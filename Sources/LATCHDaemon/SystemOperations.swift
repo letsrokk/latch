@@ -6,6 +6,14 @@ import OSLog
 
 enum SystemOperationError: Error { case unavailable, conflict, nonEmptyMountPoint, invalidDependency }
 
+struct MountCleanupError: Error, LocalizedError {
+    let originalFailure: String
+
+    var errorDescription: String? {
+        "\(originalFailure) Safe cleanup also failed, so the unverified mount may remain accessible. Close files on the share and unmount it before retrying."
+    }
+}
+
 protocol ApplicationCoordinatorRequesting: AgentRequesting {}
 
 struct FixedProcess {
@@ -72,6 +80,20 @@ actor SystemMountOperator: MountOperating {
         try await FixedProcess.run(executable: "/sbin/umount", arguments: ["-f", target], timeout: 20)
     }
 
+    func unmount(
+        _ mountPoint: String,
+        expectedSource: String,
+        cancellation: MountOperationCancellation
+    ) async throws {
+        try cancellation.throwIfCancelled()
+        let target = try validatedUnmountPath(mountPoint)
+        guard try table.snapshots().contains(where: {
+            $0.mountPoint == target && $0.source == expectedSource
+        }) else { throw SystemOperationError.conflict }
+        try cancellation.throwIfCancelled()
+        try await FixedProcess.run(executable: "/sbin/umount", arguments: [target], timeout: 20)
+    }
+
     func validateEmptyMountPoint(_ mountPoint: String, cancellation: MountOperationCancellation) async throws {
         try cancellation.throwIfCancelled()
         _ = try bindTarget(mountPoint, requireEmpty: true, requireTargetOwner: true)
@@ -80,16 +102,69 @@ actor SystemMountOperator: MountOperating {
 
     func mount(_ definition: MountDefinition, cancellation: MountOperationCancellation) async throws {
         try cancellation.throwIfCancelled()
+        do {
+            try definition.mountOptions.validate()
+        } catch {
+            mountLogger.error("Mount option validation failed for \(definition.id.uuidString, privacy: .public)")
+            throw error
+        }
         let binding = try bindTarget(definition.mountPoint, requireEmpty: true, requireTargetOwner: true)
         try cancellation.throwIfCancelled()
-        mountLogger.notice("Mounting definition \(definition.id.uuidString, privacy: .public)")
+        let safeOptions = definition.mountOptions.encoded.split(separator: ",").map { option in
+            let name = String(option.split(separator: "=", maxSplits: 1)[0])
+            return ["vers", "rsize", "wsize"].contains(name) || !option.contains("=") ? String(option) : name + "=<redacted>"
+        }.joined(separator: ",")
+        mountLogger.notice("Mounting definition \(definition.id.uuidString, privacy: .public); requested options: \(safeOptions, privacy: .public)")
         try revalidate(binding)
         try cancellation.throwIfCancelled()
-        try await FixedProcess.run(
-            executable: "/sbin/mount",
-            arguments: ["-t", "nfs", "-o", definition.mountOptions.encoded, definition.source, definition.mountPoint],
-            timeout: 30
-        )
+        var mountedButUnverified = false
+        do {
+            let result = try await BoundedProcessRunner.run(
+                executable: "/sbin/mount_nfs",
+                arguments: ["-o", definition.mountOptions.encoded, definition.source, definition.mountPoint],
+                timeout: .seconds(30)
+            )
+            guard result.terminationStatus == 0 else {
+                let diagnostic = result.standardError.lowercased()
+                let detail: String
+                if diagnostic.contains("permission denied") || diagnostic.contains("access denied") || diagnostic.contains("authentication") {
+                    detail = "The NFS server rejected access. Review export permissions and authentication settings."
+                } else if diagnostic.contains("option") || diagnostic.contains("version") || diagnostic.contains("argument") {
+                    detail = "The NFS mount configuration was rejected. Review the requested protocol and additional options."
+                } else {
+                    detail = "The NFS mount failed. Check server availability and export permissions."
+                }
+                throw SystemCommandError(executable: "/sbin/mount_nfs", status: result.terminationStatus, detail: detail)
+            }
+            mountedButUnverified = true
+            guard result.standardError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw SystemCommandError(executable: "/sbin/mount_nfs", status: result.terminationStatus, detail: "The NFS client reported a warning; an option may be unsupported or ignored. Review the requested mount options.")
+            }
+            try cancellation.throwIfCancelled()
+            let snapshot = try table.snapshots().first { $0.source == definition.source && $0.mountPoint == definition.mountPoint }
+            try NFSObservedOptions(options: snapshot?.options ?? []).verifyRequestedVersion(definition.mountOptions.nfsVersion)
+        } catch {
+            let detail = if let error = error as? NFSVersionVerificationError {
+                error.localizedDescription
+            } else if let error = error as? SystemCommandError {
+                error.localizedDescription
+            } else {
+                TelemetryErrorPresentation.publicSummary(for: error)
+            }
+            mountLogger.error("Mount failed for \(definition.id.uuidString, privacy: .public); requested options: \(safeOptions, privacy: .public); \(detail, privacy: .public)")
+            if mountedButUnverified {
+                do {
+                    try await unmount(definition.mountPoint, expectedSource: definition.source, cancellation: .never)
+                } catch {
+                    mountLogger.error("Safe cleanup failed for unverified mount \(definition.id.uuidString, privacy: .public)")
+                    throw MountCleanupError(originalFailure: detail)
+                }
+            }
+            if error is BoundedProcessError {
+                throw SystemCommandError(executable: "/sbin/mount_nfs", status: SIGKILL, detail: "The NFS mount command timed out.")
+            }
+            throw error
+        }
     }
 
     private func bindTarget(_ path: String, requireEmpty: Bool, requireTargetOwner: Bool) throws -> TargetBinding {

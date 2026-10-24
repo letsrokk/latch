@@ -52,6 +52,7 @@ actor DaemonController {
     let discovery = BonjourNFSServerDiscovery()
     let mountWork = MountWorkCoordinator()
     var configuration: LATCHConfiguration
+    var configurationLoadError: String?
     var configurationPersistenceHealth: PersistenceHealthSnapshot
     var statuses: [UUID: MountStatus] = [:]
     var events: [LATCHEvent] = []
@@ -64,6 +65,8 @@ actor DaemonController {
     var operationSnapshots: [UUID: OperationSnapshot] = [:]
     var operationCancellations: [UUID: OperationCancellationToken] = [:]
     var operationMountIDs: [UUID: UUID] = [:]
+    private var applyingMountID: UUID?
+    private var configurationMutationInProgress = false
     var lastChecks: [UUID: Date] = [:]
     var mountedAt: [UUID: Date] = [:]
     var lastRuleSatisfaction: [UUID: Bool] = [:]
@@ -99,6 +102,7 @@ actor DaemonController {
         let wakeOnLAN = WakeOnLANController(sender: NativeWakeOnLANPacketSender(), broadcasts: NativeIPv4BroadcastProvider(), state: stateStore)
         self.wakeOnLAN = wakeOnLAN
         automaticWake = AutomaticWakeOrchestrator(performer: NativeAutomaticWakePerformer(controller: wakeOnLAN, reachability: NativeNFSReachability()))
+        configurationLoadError = startupConfiguration.configurationError
         configuration = startupConfiguration.configuration
         configurationPersistenceHealth = startupConfiguration.persistenceHealth
         self.onStatusesChanged = onStatusesChanged
@@ -158,6 +162,16 @@ actor DaemonController {
 
     func handle(_ request: LATCHRequest) async -> LATCHResponse {
         do {
+            let mutatesConfiguration: Bool = switch request {
+            case .saveServer, .saveServerAndDefinition, .removeServer, .saveDefinition, .applyAndRemount,
+                 .removeDefinition, .setEnabled, .applyPortableConfiguration, .uninstall: true
+            default: false
+            }
+            if mutatesConfiguration && (applyingMountID != nil || configurationMutationInProgress) {
+                return .failure(.mountConflict, "Wait for the current configuration change or Apply and Remount to finish.")
+            }
+            if mutatesConfiguration { configurationMutationInProgress = true }
+            defer { if mutatesConfiguration { configurationMutationInProgress = false } }
             switch request {
             case .getServiceStatus:
                 return .serviceStatus(.init(
@@ -170,8 +184,12 @@ actor DaemonController {
                         with: await stateStore.persistenceHealthSnapshot()
                     )
                 ))
-            case .getStatus: return .statuses(Array(statuses.values))
-            case .getConfiguration: return .configuration(configuration)
+            case .getStatus:
+                let snapshots = (try? table.snapshots()) ?? []
+                return .statuses(statuses.values.map { observedStatus($0, snapshots: snapshots) })
+            case .getConfiguration:
+                if let configurationLoadError { return .failure(.verificationFailed, configurationLoadError) }
+                return .configuration(configuration)
             case .getOperations:
                 return .operationSnapshots(operationSnapshots.values.sorted { $0.updatedAt > $1.updatedAt })
             case .exportPortableConfiguration:
@@ -257,6 +275,20 @@ actor DaemonController {
                 try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
                 await finishSaving(saved, isNew: isNew)
                 return .accepted
+            case .applyAndRemount(let definition):
+                guard let saved = configuration.mounts.first(where: { $0.id == definition.id }),
+                      let previous = resolvedDefinition(saved) else {
+                    return .failure(.malformedRequest, "Save this mount before applying NFS options.")
+                }
+                var candidate = configuration
+                candidate.mounts.removeAll { $0.id == definition.id }
+                candidate.mounts.append(definition)
+                try ConfigurationValidator().validate(candidate, liveMounts: try externalMounts())
+                guard let resolved = candidate.resolve(definition), resolved.source == previous.source,
+                      definition.mountPoint == previous.mountPoint else {
+                    return .failure(.sourceMismatch, "Save server, export, or mount-folder changes separately before applying NFS options.")
+                }
+                return queueApplyOperation(previous: previous, candidate: definition.resolved(using: resolved.server), configuration: candidate)
             case .removeDefinition(let id, let confirmMounted):
                 guard let definition = configuration.mounts.first(where: { $0.id == id }) else { return .failure(.malformedRequest, "Unknown mount definition.") }
                 guard let resolved = resolvedDefinition(definition) else { return .failure(.malformedRequest, "The mount references an unknown NFS server.") }
@@ -345,6 +377,7 @@ actor DaemonController {
     }
 
     private func persistConfiguration(_ candidate: LATCHConfiguration) throws {
+        guard configurationLoadError == nil else { throw ConfigurationValidationError.unsupportedSchemaVersion }
         do {
             try store.save(candidate)
             wakeMonitoringLoop()
@@ -358,6 +391,7 @@ actor DaemonController {
     private func removeAllPersistentState() throws {
         do {
             try store.removeAllState()
+            configurationLoadError = nil
             configurationPersistenceHealth = PersistenceHealthSnapshot(lastSuccessfulWriteAt: Date())
         } catch {
             recordConfigurationPersistenceFailure(error)
@@ -378,6 +412,9 @@ actor DaemonController {
     }
 
     private func queueOperation(action: LATCHAction, definition: MountDefinition, confirmed: Bool) -> LATCHResponse {
+        guard applyingMountID != definition.id else {
+            return .failure(.mountConflict, "Wait for Apply and Remount to finish before operating on this mount.")
+        }
         if OperationLifecycle.conflict(for: definition.id, in: operationSnapshots.values) != nil {
             return .failure(.mountConflict, "Another operation is already active for this mount.")
         }
@@ -437,6 +474,55 @@ actor DaemonController {
         return .operationAccepted(receipt)
     }
 
+    private func queueApplyOperation(previous: MountDefinition, candidate: MountDefinition, configuration candidateConfiguration: LATCHConfiguration) -> LATCHResponse {
+        guard OperationLifecycle.conflict(for: previous.id, in: operationSnapshots.values) == nil else {
+            return .failure(.mountConflict, "Another operation is already active for this mount.")
+        }
+        applyingMountID = previous.id
+        let receipt = OperationReceipt(id: UUID(), mountID: previous.id, action: .recover)
+        operationSnapshots[receipt.id] = .init(id: receipt.id, mountID: previous.id, action: .recover, state: .accepted, canCancel: false, detail: "Apply and Remount queued.")
+        operationMountIDs[receipt.id] = previous.id
+        operationTasks[receipt.id] = Task { [weak self] in
+            guard let self else { return }
+            await self.runApplyOperation(receipt, previous: previous, candidate: candidate, configuration: candidateConfiguration)
+        }
+        return .operationAccepted(receipt)
+    }
+
+    private func runApplyOperation(_ receipt: OperationReceipt, previous: MountDefinition, candidate: MountDefinition, configuration candidateConfiguration: LATCHConfiguration) async {
+        let token = mountWork.beginManual(for: previous.id)
+        defer {
+            mountWork.finishManual(token)
+            applyingMountID = nil
+        }
+        updateOperation(receipt.id, state: .running, canCancel: false, detail: "Applying NFS options with guarded restoration.")
+        await coordinator.waitUntilIdle()
+        let previousPaused = await stateStore.isPaused(previous.id)
+        let previousRetry = await stateStore.automaticRetryState(for: previous.id)
+        do {
+            _ = try await stateStore.setMonitoringState(paused: true, automaticRetry: nil, for: previous.id, ifCurrent: { true })
+            let result = await coordinator.apply(previous: previous, candidate: candidate) { [weak self] in
+                guard let self else { throw MountOperationCancellationError.cancelled }
+                try await self.commitAppliedConfiguration(candidateConfiguration)
+            }
+            if result.state != .failedClosed {
+                _ = try await stateStore.setMonitoringState(paused: previousPaused, automaticRetry: previousRetry, for: previous.id, ifCurrent: { true })
+            }
+            let active = resolvedDefinition(configuration.mounts.first { $0.id == previous.id } ?? previous) ?? previous
+            await record(status(active, source: result.state == .healthy ? active.source : nil, state: result.state, code: result.code, detail: result.detail, at: Date(), recovered: result.didAttemptRecovery))
+            updateOperation(receipt.id, state: result.code == .none ? .succeeded : .failed, canCancel: false, detail: result.detail)
+        } catch {
+            let detail = "Apply and Remount could not complete because monitoring or configuration state could not be persisted: \(error.localizedDescription). Check mount and dependency status before retrying."
+            updateOperation(receipt.id, state: .failed, canCancel: false, detail: detail)
+            await record(status(previous, source: nil, state: .failedClosed, code: .persistenceFailed, detail: detail, at: Date()))
+        }
+        finishQueuedOperation(receipt.id)
+    }
+
+    private func commitAppliedConfiguration(_ candidate: LATCHConfiguration) throws {
+        try ConfigurationPersistenceTransaction.commit(candidate, current: &configuration) { try persistConfiguration($0) }
+    }
+
     private func finishQueuedOperation(_ operationID: UUID) {
         operationTasks.removeValue(forKey: operationID)
         operationCancellations.removeValue(forKey: operationID)
@@ -466,7 +552,7 @@ actor DaemonController {
         guard let current = operationSnapshots[operationID] else {
             return .failure(.malformedRequest, "Unknown operation.")
         }
-        guard current.state == .accepted || current.state == .running else {
+        guard current.canCancel, current.state == .accepted || current.state == .running else {
             return .operationSnapshot(current)
         }
         operationCancellations[operationID]?.cancel()

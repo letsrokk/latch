@@ -5,13 +5,13 @@ import Testing
 @Suite("Schema v2 configuration and retry state")
 struct SchemaV2Tests {
     @Test func xpcUsesSchemaV2ProtocolVersion() {
-        #expect(XPCCodec.currentVersion == 2)
+        #expect(XPCCodec.currentVersion == 3)
     }
 
     @Test func defaultConfigurationUsesServerReferences() {
         let configuration = LATCHConfiguration()
 
-        #expect(configuration.schemaVersion == 2)
+        #expect(configuration.schemaVersion == 3)
         #expect(configuration.servers.isEmpty)
         #expect(configuration.mounts.isEmpty)
     }
@@ -45,11 +45,38 @@ struct SchemaV2Tests {
 
         let migrated = try store.load()
 
-        #expect(migrated.schemaVersion == 2)
+        #expect(migrated.schemaVersion == 3)
         #expect(migrated.servers.count == 1)
         #expect(migrated.mounts.map(\.id) == [firstID, secondID])
         #expect(migrated.mounts.allSatisfy { $0.serverID == migrated.servers[0].id })
         #expect(FileManager.default.fileExists(atPath: store.schema1RollbackURL.path))
+    }
+
+    @Test func schemaTwoMigratesWithoutAddingMountArguments() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = NFSServerProfile(name: "NAS", hostname: "nas.local")
+        let mount = MountDefinition(displayName: "Media", serverID: server.id, exportPath: "/media", mountPoint: "/Volumes/Media/Test")
+        let store = ConfigurationStore(directory: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try JSONEncoder().encode(LATCHConfiguration(schemaVersion: 2, servers: [server], mounts: [mount])).write(to: store.configurationURL)
+        let migrated = try store.load()
+        #expect(migrated.schemaVersion == 3)
+        #expect(migrated.mounts[0].mountOptions.encoded == NFSOptions.recommended.encoded)
+    }
+
+    @Test func unsupportedSchemaIsPreservedAndReportedWithoutUsingAnOlderBackup() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ConfigurationStore(directory: root)
+        try store.save(.init())
+        let future = try JSONEncoder().encode(LATCHConfiguration(schemaVersion: 99))
+        try future.write(to: store.configurationURL)
+        #expect(throws: ConfigurationValidationError.unsupportedSchemaVersion) { try store.load() }
+        let startup = store.loadForStartup()
+        #expect(startup.configurationError == ConfigurationValidationError.unsupportedSchemaVersion.localizedDescription)
+        #expect(startup.persistenceHealth.isDegraded)
+        #expect(try Data(contentsOf: store.configurationURL) == future)
     }
 
     @Test func resolutionBuildsHostnameQualifiedSource() {

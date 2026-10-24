@@ -5,6 +5,97 @@ import Testing
 
 @Suite("Guarded recovery")
 struct RecoveryCoordinatorTests {
+    @Test func applyingOptionsCommitsAfterVerificationBeforeResumingDependencies() async {
+        let dep = dependency(name: "radarr")
+        let previous = makeDefinition(dependencies: [dep])
+        var candidate = previous
+        candidate.mountOptions.readOnly = true
+        let mounts = FakeApplyMountOperator()
+        let dependencies = FakeDependencyOperator(running: [dep.id])
+        let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: dependencies, permissionGate: { true })
+        let commits = AsyncCounter()
+
+        let result = await coordinator.apply(previous: previous, candidate: candidate) {
+            #expect(await mounts.operations == ["unmount", "empty", "mount:new", "verifySource", "probe"])
+            #expect(await dependencies.running.isEmpty)
+            await commits.increment()
+        }
+
+        #expect(result.state == .healthy)
+        #expect(result.code == .none)
+        #expect(await commits.value == 1)
+        #expect(await dependencies.running == Set([dep.id]))
+    }
+
+    @Test(arguments: [false, true]) func failedApplyRestoresPreviousOptionsBeforeResumingDependencies(failVerification: Bool) async {
+        let dep = dependency(name: "radarr")
+        let previous = makeDefinition(dependencies: [dep])
+        var candidate = previous
+        candidate.mountOptions.readOnly = true
+        let mounts = FakeApplyMountOperator(failCandidateMount: !failVerification, failCandidateProbe: failVerification)
+        let dependencies = FakeDependencyOperator(running: [dep.id])
+        let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: dependencies, permissionGate: { true })
+        let commits = AsyncCounter()
+
+        let result = await coordinator.apply(previous: previous, candidate: candidate) { await commits.increment() }
+
+        #expect(result.state == .healthy)
+        #expect(result.code == .remountFailed)
+        #expect(result.detail.contains("previous configuration was restored"))
+        #expect(await commits.value == 0)
+        #expect(await mounts.operations.suffix(4) == ["empty", "mount:old", "verifySource", "probe"])
+        #expect(await dependencies.running == Set([dep.id]))
+    }
+
+    @Test func failedRestorationKeepsDependenciesPaused() async {
+        let dep = dependency(name: "radarr")
+        let previous = makeDefinition(dependencies: [dep])
+        var candidate = previous
+        candidate.mountOptions.readOnly = true
+        let mounts = FakeApplyMountOperator(failCandidateMount: true, failRestoration: true)
+        let dependencies = FakeDependencyOperator(running: [dep.id])
+        let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: dependencies, permissionGate: { true })
+
+        let result = await coordinator.apply(previous: previous, candidate: candidate) { Issue.record("Failed apply must not commit") }
+
+        #expect(result.state == .failedClosed)
+        #expect(result.detail.contains("Restoring the previous configuration also failed"))
+        #expect(await dependencies.running.isEmpty)
+        #expect(await dependencies.operations.contains("start:radarr") == false)
+    }
+
+    @Test func failedCommitRestoresPreviousMount() async {
+        let previous = makeDefinition()
+        var candidate = previous
+        candidate.mountOptions.readOnly = true
+        let mounts = FakeApplyMountOperator()
+        let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: FakeDependencyOperator(), permissionGate: { true })
+
+        let result = await coordinator.apply(previous: previous, candidate: candidate) { throw FakeFailure.expected }
+
+        #expect(result.state == .healthy)
+        #expect(result.code == .remountFailed)
+        #expect(await mounts.operations.filter { $0 == "unmount" }.count == 2)
+        #expect(await mounts.operations.contains("mount:old"))
+    }
+
+    @Test func busyNormalUnmountLeavesPreviousMountAndResumesDependencies() async {
+        let dep = dependency(name: "radarr")
+        let previous = makeDefinition(dependencies: [dep])
+        var candidate = previous
+        candidate.mountOptions.readOnly = true
+        let mounts = FakeApplyMountOperator(failUnmount: true)
+        let dependencies = FakeDependencyOperator(running: [dep.id])
+        let coordinator = RecoveryCoordinator(mounts: mounts, dependencies: dependencies, permissionGate: { true })
+
+        let result = await coordinator.apply(previous: previous, candidate: candidate) { Issue.record("Busy mount must not commit") }
+
+        #expect(result.state == .healthy)
+        #expect(result.code == .remountFailed)
+        #expect(await mounts.operations == ["unmount", "verifySource", "probe"])
+        #expect(await dependencies.running == Set([dep.id]))
+    }
+
     @Test func automaticWorkRunsWithBoundedConcurrency() async {
         let tracker = ConcurrentWorkTracker()
 
@@ -606,6 +697,51 @@ struct RecoveryCoordinatorTests {
 
     private func dependency(name: String) -> RecoveryDependency {
         RecoveryDependency(kind: .dockerContainer(.init(containerName: name, dockerSocketPath: "/tmp/docker.sock", composeFilePath: nil)))
+    }
+}
+
+private actor FakeApplyMountOperator: MountOperating {
+    var operations: [String] = []
+    var mounted = true
+    var candidateMounted = false
+    let failCandidateMount: Bool
+    let failCandidateProbe: Bool
+    let failRestoration: Bool
+    let failUnmount: Bool
+
+    init(failCandidateMount: Bool = false, failCandidateProbe: Bool = false, failRestoration: Bool = false, failUnmount: Bool = false) {
+        self.failCandidateMount = failCandidateMount
+        self.failCandidateProbe = failCandidateProbe
+        self.failRestoration = failRestoration
+        self.failUnmount = failUnmount
+    }
+
+    func networkAvailable(for host: String) async -> Bool { true }
+    func currentSource(at mountPoint: String) async throws -> String? { mounted ? "server.local:/media" : nil }
+    func forceUnmount(_ mountPoint: String, expectedSource: String, cancellation: MountOperationCancellation) async throws {
+        Issue.record("Apply must never force an unmount")
+        throw FakeFailure.expected
+    }
+    func unmount(_ mountPoint: String, expectedSource: String, cancellation: MountOperationCancellation) async throws {
+        operations.append("unmount")
+        if failUnmount { throw FakeFailure.expected }
+        mounted = false
+    }
+    func validateEmptyMountPoint(_ mountPoint: String, cancellation: MountOperationCancellation) async throws { operations.append("empty") }
+    func mount(_ definition: MountDefinition, cancellation: MountOperationCancellation) async throws {
+        let isCandidate = definition.mountOptions.readOnly
+        operations.append(isCandidate ? "mount:new" : "mount:old")
+        if isCandidate ? failCandidateMount : failRestoration { throw FakeFailure.expected }
+        mounted = true
+        candidateMounted = isCandidate
+    }
+    func verifySource(_ source: String, at mountPoint: String, cancellation: MountOperationCancellation) async throws {
+        operations.append("verifySource")
+        if !mounted { throw FakeFailure.expected }
+    }
+    func probe(_ definition: MountDefinition, cancellation: MountOperationCancellation) async throws -> ProbeResult {
+        operations.append("probe")
+        return candidateMounted && failCandidateProbe ? ProbeResult(metadataErrno: EIO) : ProbeResult()
     }
 }
 

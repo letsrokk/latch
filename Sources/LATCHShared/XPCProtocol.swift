@@ -65,6 +65,7 @@ public enum LATCHRequest: Codable, Sendable, Equatable {
     case saveServerAndDefinition(NFSServerProfile, MountDefinition)
     case removeServer(UUID)
     case saveDefinition(MountDefinition)
+    case applyAndRemount(MountDefinition)
     case removeDefinition(UUID, confirmMounted: Bool)
     case setEnabled(UUID, Bool)
     case perform(UUID, LATCHAction, confirmed: Bool)
@@ -340,7 +341,7 @@ public enum XPCValidationError: Error, Sendable, Equatable {
 }
 
 public enum XPCCodec {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
     public static let maximumMessageBytes = 1_048_576
 
     public static func encodeRequest(_ request: LATCHRequest, requestID: UUID = UUID()) throws -> Data {

@@ -59,7 +59,7 @@ public struct ConfigurationValidator: Sendable {
     }
 
     public func validate(_ configuration: LATCHConfiguration, liveMounts: [ExternalMountSnapshot]) throws {
-        guard configuration.schemaVersion == 2 else { throw ConfigurationValidationError.unsupportedSchemaVersion }
+        guard configuration.schemaVersion == 3 else { throw ConfigurationValidationError.unsupportedSchemaVersion }
         var serverIDs = Set<UUID>()
         var serverHostnames = Set<String>()
         for server in configuration.servers {
@@ -87,6 +87,7 @@ public struct ConfigurationValidator: Sendable {
         let externalMountPoints = Set(liveMounts.map { normalizePath($0.mountPoint) })
 
         for definition in definitions {
+            try definition.mountOptions.validate()
             guard ids.insert(definition.id).inserted else { throw ConfigurationValidationError.duplicateID }
             guard !definition.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw ConfigurationValidationError.invalidDisplayName

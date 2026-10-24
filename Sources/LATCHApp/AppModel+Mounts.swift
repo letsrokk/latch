@@ -3,6 +3,22 @@ import LATCHShared
 
 @MainActor
 extension AppModel {
+    func applyAndRemount(_ draft: MountDraft) async -> MountEditorSaveResult {
+        do {
+            switch try await send(.applyAndRemount(draft.definition())) {
+            case .operationAccepted(let receipt):
+                beginMonitoring(receipt, canCancel: false)
+                return .saved
+            case .failure(_, let detail):
+                return .failed(detail)
+            default:
+                return .failed("The daemon returned an invalid remount response.")
+            }
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
     func save(_ draft: MountDraft) async -> MountEditorSaveResult {
         await save(draft, creating: nil)
     }
@@ -76,13 +92,13 @@ extension AppModel {
         }
     }
 
-    private func beginMonitoring(_ receipt: OperationReceipt) {
+    private func beginMonitoring(_ receipt: OperationReceipt, canCancel: Bool = true) {
         operationSnapshots[receipt.id] = OperationSnapshot(
             id: receipt.id,
             mountID: receipt.mountID,
             action: receipt.action,
             state: .accepted,
-            canCancel: true,
+            canCancel: canCancel,
             detail: "Operation queued.",
             updatedAt: receipt.startedAt
         )

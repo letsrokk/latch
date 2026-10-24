@@ -31,6 +31,40 @@ struct ModelValidationTests {
         #expect(options.encoded == "ro,resvport,tcp,intr,nolocks,nobrowse,noexec,nosuid,nodev")
     }
 
+    @Test func newNFSOptionsEncodeWithoutChangingLegacyDefaults() throws {
+        var options = NFSOptions.recommended
+        let legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)) as! [String: Any]
+        let oldKeys = legacy.filter { !["nfsVersion", "readSizeBytes", "writeSizeBytes", "additionalMountOptions"].contains($0.key) }
+        let decoded = try JSONDecoder().decode(NFSOptions.self, from: JSONSerialization.data(withJSONObject: oldKeys))
+        #expect(decoded == options)
+        options.nfsVersion = "4.1"
+        options.readSizeBytes = 131072
+        options.writeSizeBytes = 131072
+        options.additionalMountOptions = " readahead=32, ,acregmax=30 "
+        #expect(options.encoded == "rw,resvport,tcp,intr,nobrowse,nosuid,nodev,vers=4.1,rsize=131072,wsize=131072,readahead=32,acregmax=30")
+        let roundTrip = try JSONDecoder().decode(NFSOptions.self, from: JSONEncoder().encode(options))
+        #expect(roundTrip == options)
+    }
+
+    @Test(arguments: ["=32", "readahead=", "a=b=c", "foo bar", "foo=bar\nbaz", "foo=bar\u{0}", "-o", "server:/share", "/mnt/share", "readahead=2,readahead=3", "soft,hard", "ac,noac", "sync,async", "hard,nosoft", "sync,noasync", "vers=4.1", "nfsvers=3", "nfsv4", "rsize=4096", "rwsize=8192", "tcp,udp", "ro,rw", "nointr", "locks", "nolockd", "nolocallocks", "browse", "exec", "suid", "dev", "proto=udp", "update", "bg"])
+    func invalidAdditionalOptionsAreRejected(_ value: String) {
+        #expect(throws: NFSOptionsValidationError.self) { try NFSOptions.parseAdditional(value) }
+    }
+
+    @Test func additionalOptionsHaveBoundsAndDoNotEvaluateValues() throws {
+        #expect(try NFSOptions.parseAdditional(" readahead=32, ,acregmax=30,custom_flag ") == ["readahead=32", "acregmax=30", "custom_flag"])
+        #expect(try NFSOptions.parseAdditional("custom=$(id);touch/tmp/never") == ["custom=$(id);touch/tmp/never"])
+        #expect(throws: NFSOptionsValidationError.self) { try NFSOptions.parseAdditional(String(repeating: "x", count: 4097)) }
+        #expect(throws: NFSOptionsValidationError.self) { try NFSOptions.parseAdditional((0..<65).map { "custom\($0)" }.joined(separator: ",")) }
+        #expect(throws: NFSOptionsValidationError.self) { try NFSOptions.parseAdditional("mntvers=3,mountvers=2") }
+        var invalid = NFSOptions.recommended
+        invalid.readSizeBytes = 12345
+        #expect(throws: NFSOptionsValidationError.self) { try invalid.validate() }
+        invalid = .recommended
+        invalid.nfsVersion = "4.9"
+        #expect(throws: NFSOptionsValidationError.self) { try invalid.validate() }
+    }
+
     @Test func externalMountpointConflictIsRejected() throws {
         let definition = makeDefinition(mountPoint: "/Volumes/Media/Movies")
         let external = ExternalMountSnapshot(
@@ -173,7 +207,7 @@ struct ModelValidationTests {
 
     @Test func unsupportedConfigurationSchemaIsRejected() {
         #expect(throws: ConfigurationValidationError.unsupportedSchemaVersion) {
-            try ConfigurationValidator().validate(LATCHConfiguration(schemaVersion: 3, mounts: []), liveMounts: [])
+            try ConfigurationValidator().validate(LATCHConfiguration(schemaVersion: 99, mounts: []), liveMounts: [])
         }
     }
 

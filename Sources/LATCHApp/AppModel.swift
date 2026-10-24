@@ -154,7 +154,11 @@ final class AppModel: ObservableObject {
             serviceStatus = value
             hasLoadedServiceStatus = true
         }
-        if case .configuration(let value) = try await send(.getConfiguration) { configuration = value }
+        switch try await send(.getConfiguration) {
+        case .configuration(let value): configuration = value
+        case .failure(_, let detail): errorMessage = detail
+        default: break
+        }
         let shouldPollRuntime = shouldPollRuntimeData()
         if shouldPollRuntime, case .statuses(let value) = try await send(.getStatus) {
             statuses = value
